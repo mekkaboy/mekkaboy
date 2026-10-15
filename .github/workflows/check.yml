@@ -1,0 +1,13 @@
+name: check
+on: [push, pull_request]
+jobs:
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - name: Every Lua file parses (WoW runs Lua 5.1)
+        run: find . -name '*.lua' -print0 | xargs -0 -n1 luac5.1 -p
+      - name: Every .toc lists files that exist
+        run: |
+          for t in */*.toc; do d=$(dirname "$t"); grep -v '^#' "$t" | tr -d '\r' | sed '/^\s*$/d' | sed 's#\\#/#g' | while read f; do test -e "$d/$f" || { echo "$t: missing $f"; exit 1; }; done; done

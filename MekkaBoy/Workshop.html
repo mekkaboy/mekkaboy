@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MekkaBoy Workshop</title>
+<meta name="description" content="Turns a game ROM you own into a MekkaBoy cartridge. It runs in your browser. The file is not uploaded.">
+<link rel="icon" href="https://mekkaboy.com/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* The same system as mekkaboy.com: dark ground, Figtree, JetBrains Mono for anything the machine says, one gold accent. */
+:root { --bg: #15171a; --ink: #dedbd3; --bright: #f4f2ec; --muted: #b7b3a8; --dim: #8e8b82; --faint: #6f6c64;
+  --line: #2a2d33; --line-strong: #3a3d44; --well: #0e1012; --chip: #22252a; --gold: #e8c268; --gold-hover: #f4d58a; --warn: #f0a36a; --ok: #9ad17a; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Figtree', system-ui, sans-serif; font-size: 17px; line-height: 1.55; }
+a { color: var(--gold); } a:hover { color: var(--gold-hover); }
+h1, h2, h3 { margin: 0; font-weight: 700; color: var(--bright); letter-spacing: -0.015em; }
+p { margin: 0; }
+code, kbd { font-family: 'JetBrains Mono', monospace; font-size: 0.9em; background: var(--chip); padding: 2px 6px; border-radius: 4px; color: var(--bright); white-space: nowrap; }
+.wrap { width: 100%; max-width: 1140px; margin: 0 auto; padding: 0 28px; }
+
+header.site { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding: 22px 0; }
+header.site .brand { display: flex; align-items: center; text-decoration: none; }
+header.site .brand img { height: 44px; width: auto; }
+header.site nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 24px; font-size: 15px; font-weight: 500; }
+header.site nav a { color: var(--muted); text-decoration: none; } header.site nav a:hover { color: var(--bright); }
+header.site nav a.here { color: var(--bright); }
+header.site nav a.dl { color: var(--bg); background: var(--gold); padding: 9px 14px; border-radius: 6px; font-weight: 700; } header.site nav a.dl:hover { background: var(--gold-hover); color: var(--bg); }
+
+.hero { padding: 48px 0 8px; display: flex; flex-direction: column; gap: 18px; }
+.hero h1 { font-size: 44px; line-height: 1.08; font-weight: 800; }
+.hero .lede { font-size: 20px; color: var(--muted); max-width: 640px; }
+
+.bench { padding: 32px 0 24px; display: flex; flex-direction: column; gap: 16px; }
+/* the drop zone: the whole label is the target, the invisible input makes it a button too */
+.cart { position: relative; display: block; cursor: pointer; border: 2px dashed var(--line-strong); border-radius: 10px; background: var(--well);
+  padding: 44px 28px; text-align: center; color: var(--muted); font-size: 18px; transition: border-color .15s ease, background .15s ease; }
+.cart:hover, .cart.over { border-color: var(--gold); background: #121417; }
+.cart:focus-within { outline: 2px solid var(--gold); outline-offset: 3px; }
+.cart input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.sticker { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.sticker .big { font-size: 20px; color: var(--bright); font-weight: 700; overflow-wrap: anywhere; }
+.sticker .small { font-size: 15px; color: var(--muted); }
+.sticker .facts { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: center; margin-top: 4px; }
+.arrow { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--faint); margin-top: 14px; letter-spacing: .06em; text-transform: uppercase; }
+.private { font-size: 15px; color: var(--dim); }
+
+.note { margin: 0; padding: 12px 16px; border-radius: 8px; background: var(--chip); border: 1px solid var(--line); font-size: 15px; color: var(--ink); }
+.note.warn { color: var(--warn); border-color: #4a3a2a; }
+
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 32px 64px; counter-reset: step 1; align-items: start; }
+ol.steps > li { counter-increment: step; display: flex; flex-direction: column; gap: 12px; min-width: 0; max-width: 760px; }
+ol.steps > li h2::before { content: counter(step) ". "; color: var(--gold); }
+h2 { font-size: 26px; }
+.waiting h2 { color: var(--dim); } .waiting h2::before { color: var(--faint) !important; }
+.waiting p, .waiting li, .waiting label { color: var(--dim); }
+
+label.name { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+input[type=text] { font: inherit; font-size: 16px; color: var(--bright); background: var(--well); border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px 12px; width: 100%; max-width: 24rem; }
+input[type=text]:disabled { color: var(--faint); border-color: var(--line); }
+button { font: inherit; font-weight: 700; font-size: 16px; color: var(--bg); background: var(--gold); border: 0; border-radius: 6px; min-height: 44px; padding: 0 20px; cursor: pointer; align-self: flex-start; }
+button:hover { background: var(--gold-hover); }
+button:disabled { background: var(--chip); color: var(--faint); cursor: not-allowed; }
+button:focus-visible, input[type=text]:focus-visible, textarea:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.said { font-size: 15px; color: var(--ok); min-height: 1.5em; }
+.waiting .said { color: var(--dim); }
+textarea { width: 100%; height: 6rem; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px; resize: vertical; }
+ul.keys { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 8px; }
+
+.readfirst { padding: 24px 0 64px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 32px 64px; align-items: start; }
+.readfirst > div { display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+
+footer.site { border-top: 1px solid var(--line); }
+footer.site .wrap { padding-top: 24px; padding-bottom: 36px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px 32px; font-size: 14px; color: var(--dim); }
+footer.site .links { display: flex; flex-wrap: wrap; gap: 6px 20px; } footer.site .links a { color: var(--muted); }
+footer.site .legal { max-width: 620px; }
+@media (prefers-reduced-motion: reduce) { .cart { transition: none; } }
+</style>
+</head>
+<body>
+
+<header class="site wrap">
+  <a class="brand" href="https://mekkaboy.com/"><img src="https://mekkaboy.com/wordmark.png" alt="MekkaBoy"></a>
+  <nav>
+    <a href="https://mekkaboy.com/get-started/">Get started</a>
+    <a class="here" href="https://workshop.mekkaboy.com/">Workshop</a>
+    <a href="https://mekkaboy.com/games/">Games</a>
+    <a href="https://mekkaboy.com/tested/">Tested games</a>
+    <a href="https://mekkaboy.com/faq/">FAQ</a>
+    <a href="https://mekkaboy.com/feedback/">Feedback</a>
+    <a class="dl" href="https://www.curseforge.com/wow/addons/mekkaboy">Download</a>
+  </nav>
+</header>
+
+<section class="hero wrap">
+  <h1>Workshop</h1>
+  <p class="lede">Turns a game ROM you own into a MekkaBoy cartridge. It runs in your browser. The file is not uploaded.</p>
+</section>
+
+<section class="bench wrap">
+  <label class="cart" id="cart">
+    <input type="file" id="file" accept=".gb,.gbc,.sgb,.gba,.zip" aria-label="Choose your game file">
+    <div class="sticker" id="sticker">
+      <div class="big" id="stickerBig">Drop a .gb, .gbc or .gba file here, or a .zip with one inside.</div>
+      <div class="small" id="stickerSmall">Or click to choose the file.</div>
+      <div class="facts" id="stickerFacts" hidden></div>
+    </div>
+    <div class="arrow" id="arrow">Step 1</div>
+  </label>
+  <p class="private">Your game never leaves this computer. The page does all the work in your browser and sends nothing anywhere. Game Boy and Game Boy Color games become a code; Advance games are too big to paste and become a folder instead.</p>
+
+  <p class="note warn" id="problem" hidden></p>
+  <p class="note" id="soundNote" hidden></p>
+</section>
+
+<section class="bench wrap" style="padding-top: 8px">
+  <ol class="steps" id="stepsCode">
+    <li id="stepCopy" class="waiting">
+      <h2>Copy the code</h2>
+      <label class="name" for="name">Name on the shelf
+        <input type="text" id="name" maxlength="40" placeholder="Your game's name" disabled>
+      </label>
+      <button id="copy" disabled>Copy the code</button>
+      <div class="said" id="said" aria-live="polite">The button works once a file is in.</div>
+      <textarea id="manual" readonly hidden aria-label="Your code"></textarea>
+    </li>
+    <li id="stepPaste" class="waiting">
+      <h2>Paste it in the game</h2>
+      <ul class="keys">
+        <li>Back in game, type <code>/mb setup</code> if the window has closed.</li>
+        <li>Click the lower box in the setup window and press <kbd>Ctrl</kbd>+<kbd>V</kbd>. A big game can freeze the screen for a second or two while it arrives.</li>
+        <li>Click <b>Play it now</b>. The game is on the shelf immediately.</li>
+      </ul>
+      <p>The game stays on your shelf from then on, with its saves. MekkaBoy holds four pasted games at a time.</p>
+    </li>
+  </ol>
+
+  <ol class="steps" id="stepsCart" hidden>
+    <li id="stepSave">
+      <h2>Save the cartridge folder</h2>
+      <p>A Game Boy Advance game is too big to paste, so it becomes a folder of its own, saved as one zip file.</p>
+      <label class="name" for="advName">Name on the shelf
+        <input type="text" id="advName" maxlength="60" placeholder="Your game's name">
+      </label>
+      <button id="save">Save the cartridge folder</button>
+      <div class="said" id="advSaid" aria-live="polite"></div>
+    </li>
+    <li id="stepPut">
+      <h2>Put it with your addons</h2>
+      <ul class="keys">
+        <li>Close the game.</li>
+        <li>Open the zip you just saved. Inside is one folder, <code id="advFolder">MekkaBoy_Cart</code>. Put it in <code>Interface\AddOns</code> next to the <code>MekkaBoy</code> folder, not inside it. If your unzipper wrapped it in a folder of its own, move it up one level: the <code>.toc</code> file must sit directly inside <code>MekkaBoy_Cart&hellip;</code>.</li>
+        <li>Start the game again (a full start, not <code>/reload</code>) and type <code id="advCommand">/mb cart</code>, or pick the game from the shelf.</li>
+      </ul>
+      <p>The game keeps its saves with MekkaBoy. To take it off the shelf, delete its folder.</p>
+    </li>
+  </ol>
+</section>
+
+<section class="readfirst wrap">
+  <div>
+    <h2>Read this first</h2>
+    <p>Use a game you own. The code or folder is your copy of that game. Don't share it and don't ask other people for theirs.</p>
+    <p>We do not supply games and will not help you find them.</p>
+  </div>
+  <div>
+    <h2>Sound and speed</h2>
+    <p>A game you add this way has no sound. Sound needs a soundtrack pack recorded from your copy using the tools in the download; the <a href="https://mekkaboy.com/faq/">FAQ</a> explains how. If you skip that step, the game plays silently. The four included games have their music already.</p>
+    <p>If you want to know whether a game runs well before you go through this, check the <a href="https://mekkaboy.com/tested/">Tested page</a>. Game Boy, Game Boy Color and most cartridge types work; a few rare ones (camera, tilt sensor) do not. Heavy Advance games run slow.</p>
+  </div>
+</section>
+
+<footer class="site">
+  <div class="wrap">
+    <div class="links">
+      <a href="https://www.curseforge.com/wow/addons/mekkaboy">CurseForge</a>
+      <a href="https://github.com/mekkaboy">GitHub</a>
+      <a href="https://mekkaboy.com/feedback/">Feedback</a>
+      <a href="mailto:hello@mekkaboy.com">hello@mekkaboy.com</a>
+    </div>
+    <div class="legal">Not affiliated with Nintendo or Blizzard Entertainment. Game Boy, Game Boy Color and Game Boy Advance are trademarks of Nintendo. World of Warcraft is a trademark of Blizzard Entertainment. &copy; 2026 MekkaLabs. MIT License.</div>
+  </div>
+</footer>
+
+<script id="workshop-core">
+// Everything that turns a ROM into a code. No page access in here, so the
+// same code can be checked outside a browser.
+var Workshop = (function () {
+  var BANK = 16384;
+  // games MekkaBoy has a soundtrack recipe for (SHA-1 of the ROM)
+  var SOUND = {
+    "f2f52230b536214ef7c9924f483392993e226cfb": "Pokemon Crystal",
+    "d8b8a3600a465308c9953dfa04f0081c05bdcb94": "Pokemon Gold",
+    "ea9bcae617fdf159b045185467ae58b2e4a48b9a": "Pokemon Red",
+    "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2": "Pokemon Blue"
+  };
+
+  function adler32(bytes) {
+    var a = 1, b = 0, i = 0, n = bytes.length;
+    while (i < n) {
+      var end = Math.min(i + 5552, n);
+      for (; i < end; i++) { a += bytes[i]; b += a; }
+      a %= 65521; b %= 65521;
+    }
+    return ((b << 16) | a) >>> 0;
+  }
+  function ascii(s) {
+    var out = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+  function base64(bytes) {
+    var parts = [];
+    for (var i = 0; i < bytes.length; i += 0x6000) {
+      parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 0x6000)));
+    }
+    return btoa(parts.join(""));
+  }
+  async function pipe(bytes, stream) {
+    return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+  }
+  async function sha1(bytes) {
+    try {
+      var d = new Uint8Array(await crypto.subtle.digest("SHA-1", bytes));
+      return Array.from(d, function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+    } catch (e) { return null; }
+  }
+
+  function title(rom) {
+    var end = rom[0x143] >= 0x80 ? 0x13F : 0x143, t = "";
+    for (var i = 0x134; i < end; i++) {
+      if (rom[i] < 32 || rom[i] >= 127) break;
+      t += String.fromCharCode(rom[i]);
+    }
+    return t.trim();
+  }
+  function cartId(rom) {
+    var id = title(rom).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    var hex = function (x) { return x.toString(16).toUpperCase().padStart(2, "0"); };
+    return id || "GAME_" + hex(rom[0x14E]) + hex(rom[0x14F]);
+  }
+  function niceName(fileName) {
+    var n = fileName.replace(/^.*[\\\/]/, "").replace(/\.[^.]*$/, "");
+    n = n.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "").replace(/_/g, " ").replace(/\s+/g, " ").trim();
+    return n || "Game";
+  }
+  // which cartridge types the console can run
+  function mapper(rom) {
+    var t = rom[0x147];
+    if (t === 0 || t === 8 || t === 9) return "plain";
+    if (t >= 1 && t <= 3) return "MBC1";
+    if (t === 5 || t === 6) return "MBC2";
+    if (t >= 15 && t <= 19) return "MBC3";
+    if (t >= 25 && t <= 30) return "MBC5";
+    return null;
+  }
+
+  // Why a file is not a game we can take, or null if it is fine.
+  function refuse(rom) {
+    if (rom.length < 2 * BANK) return "That file is too small to be a Game Boy game.";
+    if (rom.length % BANK) return "That file is not a clean Game Boy game (its size is odd). Try another copy of it.";
+    var x = 0;
+    for (var i = 0x134; i <= 0x14C; i++) x = (x - rom[i] - 1) & 0xFF;
+    if (x !== rom[0x14D]) return "That does not look like a Game Boy or Game Boy Color game.";
+    if (rom.length > 8 * 1024 * 1024) return "That game is too big for MekkaBoy.";
+    return null;
+  }
+
+  // A .zip holding one game: return the game inside (or null).
+  async function fromZip(zip) {
+    var v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength), end = -1;
+    for (var i = zip.length - 22; i >= 0 && i >= zip.length - 66000; i--) {
+      if (v.getUint32(i, true) === 0x06054b50) { end = i; break; }
+    }
+    if (end < 0) return null;
+    var count = v.getUint16(end + 10, true), at = v.getUint32(end + 16, true);
+    for (var k = 0; k < count && at + 46 <= zip.length; k++) {
+      if (v.getUint32(at, true) !== 0x02014b50) break;
+      var method = v.getUint16(at + 10, true), packed = v.getUint32(at + 20, true);
+      var nameLen = v.getUint16(at + 28, true), extra = v.getUint16(at + 30, true), comment = v.getUint16(at + 32, true);
+      var local = v.getUint32(at + 42, true);
+      var name = new TextDecoder().decode(zip.subarray(at + 46, at + 46 + nameLen));
+      if (/\.(gbc?|sgb|gba)$/i.test(name)) {
+        var start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+        var data = zip.subarray(start, start + packed);
+        if (method === 0) return { name: name, rom: new Uint8Array(data) };
+        if (method === 8) return { name: name, rom: await pipe(data, new DecompressionStream("deflate-raw")) };
+        return null;
+      }
+      at += 46 + nameLen + extra + comment;
+    }
+    return null;
+  }
+
+  function nameBase64(name) {
+    var bytes = new TextEncoder().encode(name);
+    while (bytes.length > 60) { name = name.slice(0, -1); bytes = new TextEncoder().encode(name); }
+    return base64(bytes);
+  }
+
+  // The slow part, done once per game.
+  async function pack(rom) {
+    var payload = base64(await pipe(rom, new CompressionStream("deflate")));
+    return { id: cartId(rom), banks: rom.length / BANK, cgb: rom[0x143] >= 0x80 ? 1 : 0, size: rom.length,
+             romSum: adler32(rom), textSum: adler32(ascii(payload)), payload: payload };
+  }
+  // The quick part, redone whenever the name changes.
+  function code(p, name) {
+    return ["MEKKA1", p.id, nameBase64(name), p.banks, p.cgb, p.size, p.romSum, p.textSum, p.payload, "END"].join(":");
+  }
+
+  // ---- Game Boy Advance. Such a game is far too big to paste, so it is cut into a cartridge folder instead:
+  // the same files Tools/gba2lua.py writes, handed over as one zip to be put with the addons.
+  var PARTS = 16, MAX_ADVANCE = 32 * 1024 * 1024;
+  // the Advance games tried so far (written here by dev/make_tested.py; nothing of the games themselves)
+  var TESTED = /*TESTED:begin*/{"A4NE-0":{"name":"Harvest Moon: Friends of Mineral Town","id":"HARVESTMOON","status":"starts","weight":1,"sound":"shared"},"A7KE-0":{"name":"Kirby: Nightmare in Dream Land","id":"KIRBY","status":"starts","weight":3,"sound":"shared"},"AMKE-0":{"name":"Mario Kart: Super Circuit","id":"MARIOKART","status":"starts","weight":8,"sound":"shared"},"AX4E-1":{"name":"Super Mario Advance 4: Super Mario Bros. 3","id":"SMA4","status":"starts","weight":3,"sound":"own"},"AXPE-2":{"name":"Pokemon Sapphire","id":"SAPPHIRE","status":"played","weight":1,"sound":"exact"},"AXVE-0":{"name":"Pokemon Ruby","id":"RUBY","status":"played","weight":1,"sound":"exact"},"B24E-0":{"name":"Pokemon Mystery Dungeon: Red Rescue Team","id":"PMDRED","status":"played","weight":8,"sound":"exact"},"B3SE-0":{"name":"Sonic Advance 3","id":"SONICADV3","status":"starts","weight":3,"sound":"shared"},"BOCE-0":{"name":"The Urbz: Sims in the City","id":"URBZ","status":"starts","weight":4,"sound":"own"},"BPEE-0":{"name":"Pokemon Emerald","id":"EMERALD","status":"played","weight":1,"sound":"exact"},"BPGE-1":{"name":"Pokemon LeafGreen","id":"LEAFGREEN","status":"played","weight":2,"sound":"exact"},"BPRE-0":{"name":"Pokemon FireRed","id":"FIRERED","status":"played","weight":2,"sound":"exact"},"BZME-0":{"name":"The Legend of Zelda: The Minish Cap","id":"MINISHCAP","status":"starts","weight":3,"sound":"shared"},"MBAA-0":{"name":"Azeroth Adventurers","id":"ADVENTURERS","status":"played","weight":1,"sound":"native"},"MBCC-0":{"name":"Critter Crate","id":"CRITTERCRATE","status":"played","weight":1,"sound":"native"},"MBCG-0":{"name":"Cogling","id":"COGLING","status":"played","weight":1,"sound":"native"},"MBGT-0":{"name":"City Gates","id":"CITYGATES","status":"played","weight":1,"sound":"native"},"MBGW-0":{"name":"Gearworks","id":"GEARWORKS","status":"played","weight":1,"sound":"native"},"MBOV-0":{"name":"Overload","id":"OVERLOAD","status":"played","weight":1,"sound":"native"}}/*TESTED:end*/;
+  var SLOW = 6;                               // (a weight from which a game is known to run slow)
+  var CHIPS = [["FLASH1M_V", "flash128", "128K flash"], ["FLASH512_V", "flash64", "64K flash"], ["FLASH_V", "flash64", "64K flash"],
+               ["EEPROM_V", "eeprom", "a serial chip, EEPROM"], ["SRAM_F_V", "sram", "battery-backed memory, SRAM"], ["SRAM_V", "sram", "battery-backed memory, SRAM"]];
+
+  function isAdvance(rom) { return rom.length >= 0xC0 && rom[0xB2] === 0x96; }
+  function refuseAdvance(rom) {
+    if (!isAdvance(rom)) return "That does not look like a Game Boy Advance game.";
+    if (rom.length > MAX_ADVANCE) return "That file is bigger than any Game Boy Advance game.";
+    return null;
+  }
+  function text(rom, from, to) {
+    var t = "";
+    for (var i = from; i < to; i++) {
+      if (rom[i] === 0) break;
+      t += rom[i] < 128 ? String.fromCharCode(rom[i]) : "\uFFFD";
+    }
+    return t;
+  }
+  // what the game says of itself
+  function label(rom) {
+    var code = "";
+    for (var i = 0xAC; i < 0xB0; i++) code += rom[i] < 128 ? String.fromCharCode(rom[i]) : "\uFFFD";
+    return { title: text(rom, 0xA0, 0xAC).trim(), code: code, version: rom[0xBC], key: code + "-" + rom[0xBC] };
+  }
+  // which chip the game keeps its saves on, from the name its save routines carry
+  function saveChip(rom) {
+    var found = {}, n = rom.length;
+    for (var i = 0; i < n; i++) {
+      var b = rom[i];
+      if (b !== 70 && b !== 69 && b !== 83) continue;           // F, E, S
+      for (var c = 0; c < CHIPS.length; c++) {
+        var tag = CHIPS[c][0];
+        if (found[tag] || tag.charCodeAt(0) !== b || i + tag.length > n) continue;
+        var k = 1;
+        while (k < tag.length && rom[i + k] === tag.charCodeAt(k)) k++;
+        if (k === tag.length) found[tag] = true;
+      }
+    }
+    for (var j = 0; j < CHIPS.length; j++) if (found[CHIPS[j][0]]) return { chip: CHIPS[j][1], words: CHIPS[j][2] };
+    return { chip: null, words: null };
+  }
+  function advanceId(rom) {
+    var l = label(rom);
+    return l.title.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 16) || ("GAME" + l.code);
+  }
+  function advanceName(fileName) {
+    var n = fileName.replace(/^.*[\\\/]/, "").replace(/\.[^.]*$/, "");
+    n = n.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "").trim();
+    var m = /^(.*), (The|A|An)( - .*)?$/.exec(n);                // "Legend of Zelda, The - X" -> "The Legend of Zelda - X"
+    if (m) n = m[2] + " " + m[1] + (m[3] || "");
+    return cleanName(n) || "Game";
+  }
+  // a name goes between quotes in the cartridge's files: nothing in it may end the quotes or the line
+  function cleanName(n) {
+    return String(n).replace(/"/g, "'").replace(/[\\\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  }
+  // have we tried this game? { entry, exact } (the entry of another version of it if not this one)
+  function tried(rom) {
+    var l = label(rom);
+    if (TESTED[l.key]) return { entry: TESTED[l.key], exact: true };
+    for (var k in TESTED) if (k.slice(0, 4) === l.code) return { entry: TESTED[k], exact: false };
+    return { entry: null, exact: false };
+  }
+  // everything there is to know about the game without running it
+  function look(rom, fileName) {
+    var l = label(rom), t = tried(rom), c = saveChip(rom), e = t.entry;
+    return { title: l.title, code: l.code, version: l.version, key: l.key, size: rom.length, entry: e, exact: t.exact,
+             chip: c.chip, chipWords: c.words, slow: !!(e && e.status !== "stops" && e.weight >= SLOW),
+             name: (e && e.name) || advanceName(fileName), id: (e && e.id) || advanceId(rom) };
+  }
+
+  // 16K of the game as a Lua string, written at out[at]; returns where it ends
+  function luaString(out, at, rom, from, n) {
+    out[at++] = 34;
+    for (var i = 0; i < n; i++) {
+      var b = rom[from + i];
+      if (b >= 32 && b < 127 && b !== 34 && b !== 92) { out[at++] = b; continue; }
+      var next = i + 1 < n ? rom[from + i + 1] : 0;
+      out[at++] = 92;
+      if ((next >= 48 && next < 58) || b >= 100) out[at++] = 48 + ((b / 100) | 0);     // (three digits when a digit follows)
+      if ((next >= 48 && next < 58) || b >= 10) out[at++] = 48 + (((b / 10) | 0) % 10);
+      out[at++] = 48 + b % 10;
+    }
+    out[at++] = 34;
+    return at;
+  }
+  function put(out, at, s) {
+    for (var i = 0; i < s.length; i++) out[at++] = s.charCodeAt(i);
+    return at;
+  }
+  // The cartridge's files, byte for byte what Tools/gba2lua.py writes: [{ name, bytes }]
+  function cartridge(rom, id, name, by) {
+    by = by || "the MekkaBoy Workshop";
+    name = cleanName(name) || "Game";
+    var size = rom.length, l = label(rom), chip = saveChip(rom).chip;
+    if (chip === "flash128") chip = null;      // (what MekkaBoy assumes when a cartridge does not say)
+    var banks = Math.ceil(size / BANK), per = Math.ceil(banks / PARTS), utf8 = new TextEncoder(), files = [];
+    files.push({ name: "rom00.lua", bytes: utf8.encode(
+      "-- A MekkaBoy Advance cartridge, written by " + by + ". Your own copy of a game: do not share.\n" +
+      "local _, C = ...\n" +
+      "if not (MekkaBoy and MekkaBoy.NewCartridge) then return end\n" +
+      'C.banks = MekkaBoy.NewCartridge({ id = "' + id + '", name = "' + name + '", numBanks = ' + banks + ', system = "gba", size = ' + size +
+      (chip ? ', chip = "' + chip + '"' : "") + " })\n") });
+    var head = "-- Written by " + by + ".\nlocal _, C = ...\nlocal B = C.banks\nif not B then return end\nlocal rep = string.rep\n";
+    var last = new Uint8Array(BANK);
+    for (var p = 0; p < PARTS; p++) {
+      var first = p * per, count = Math.max(0, Math.min(per, banks - first));
+      var out = new Uint8Array(head.length + count * (BANK * 4 + 32)), at = put(out, 0, head);
+      for (var k = 0; k < count; k++) {
+        var from = (first + k) * BANK, data = rom, n = BANK;
+        if (from + BANK > size) {              // (the last piece of a game whose size is not a round one: filled up with FF)
+          last.fill(255); last.set(rom.subarray(from, size)); data = last; from = 0;
+        }
+        var same = true, b0 = data[from];
+        for (var q = 1; q < n; q++) if (data[from + q] !== b0) { same = false; break; }
+        at = put(out, at, "B[" + (first + k + 1) + "] = ");
+        if (same) at = put(out, at, 'rep("\\' + b0 + '", ' + BANK + ")");     // all one byte: padding
+        else at = luaString(out, at, data, from, n);
+        out[at++] = 10;
+      }
+      files.push({ name: "rom" + String(p + 1).padStart(2, "0") + ".lua", bytes: out.subarray(0, at) });
+    }
+    var toc = ["## Interface: 16001", "## Title: MekkaBoy Advance Cartridge - " + name,
+               "## Notes: A game for MekkaBoy Advance (experimental), made from your own copy. Not for sharing.",
+               "## LoadOnDemand: 1", "## RequiredDeps: MekkaBoy", "## X-MekkaBoy-Cart: " + id, "## X-MekkaBoy-Name: " + name, "## X-MekkaBoy-System: gba",
+               "## X-MekkaBoy-Code: " + l.key];
+    for (var i = 0; i <= PARTS; i++) toc.push("rom" + String(i).padStart(2, "0") + ".lua");
+    files.push({ name: "MekkaBoy_Cart_" + id + ".toc", bytes: utf8.encode(toc.join("\n") + "\n") });
+    return files;
+  }
+
+  // ---- a zip file holding one folder, nothing squeezed (the game's own check sums are the safeguard)
+  var CRC = null;
+  function crc32(bytes) {
+    if (!CRC) {
+      CRC = new Uint32Array(256);
+      for (var n = 0; n < 256; n++) {
+        var c = n;
+        for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        CRC[n] = c >>> 0;
+      }
+    }
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < bytes.length; i++) crc = CRC[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  // the pieces of the zip, in order (hand them to a Blob); `when` is a Date
+  function zipParts(folder, files, when) {
+    var utf8 = new TextEncoder(), parts = [], central = [], offset = 0;
+    var time = (when.getHours() << 11) | (when.getMinutes() << 5) | (when.getSeconds() >> 1);
+    var date = ((Math.max(1980, when.getFullYear()) - 1980) << 9) | ((when.getMonth() + 1) << 5) | when.getDate();
+    files.forEach(function (f) {
+      var name = utf8.encode(folder + "/" + f.name), crc = crc32(f.bytes), n = f.bytes.length;
+      var local = new Uint8Array(30 + name.length), v = new DataView(local.buffer);
+      v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x0800, true); v.setUint16(8, 0, true);
+      v.setUint16(10, time, true); v.setUint16(12, date, true); v.setUint32(14, crc, true); v.setUint32(18, n, true); v.setUint32(22, n, true);
+      v.setUint16(26, name.length, true); v.setUint16(28, 0, true); local.set(name, 30);
+      var entry = new Uint8Array(46 + name.length), c = new DataView(entry.buffer);
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true);
+      c.setUint16(12, time, true); c.setUint16(14, date, true); c.setUint32(16, crc, true); c.setUint32(20, n, true); c.setUint32(24, n, true);
+      c.setUint16(28, name.length, true); c.setUint32(42, offset, true); entry.set(name, 46);
+      parts.push(local, f.bytes); central.push(entry);
+      offset += local.length + n;
+    });
+    var size = 0;
+    central.forEach(function (e) { parts.push(e); size += e.length; });
+    var end = new Uint8Array(22), e = new DataView(end.buffer);
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, size, true); e.setUint32(16, offset, true);
+    parts.push(end);
+    return parts;
+  }
+
+  return { SOUND: SOUND, adler32: adler32, sha1: sha1, title: title, cartId: cartId, niceName: niceName,
+           mapper: mapper, refuse: refuse, fromZip: fromZip, pack: pack, code: code,
+           TESTED: TESTED, SLOW: SLOW, isAdvance: isAdvance, refuseAdvance: refuseAdvance, label: label, saveChip: saveChip,
+           advanceId: advanceId, advanceName: advanceName, cleanName: cleanName, look: look, cartridge: cartridge,
+           crc32: crc32, zipParts: zipParts };
+})();
+if (typeof module !== "undefined") module.exports = Workshop;
+</script>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var cart = $("cart"), file = $("file"), nameBox = $("name"), copy = $("copy"), said = $("said");
+  var advName = $("advName"), save = $("save"), advSaid = $("advSaid");
+  var packed = null;          // a Game Boy game, cut into a code
+  var advance = null;         // a Game Boy Advance game: { rom, info }
+
+  function problem(text) {
+    $("problem").textContent = text || "";
+    $("problem").hidden = !text;
+  }
+  function note(text) {
+    $("soundNote").textContent = text || "";
+    $("soundNote").hidden = !text;
+  }
+  function facts(list) {
+    var box = $("stickerFacts");
+    box.textContent = "";
+    list.forEach(function (t) { var s = document.createElement("span"); s.textContent = t; box.appendChild(s); });
+    box.hidden = false;
+  }
+  function reset() {
+    packed = null; advance = null;
+    copy.disabled = true; nameBox.disabled = true; nameBox.value = "";
+    $("manual").hidden = true; note("");
+    $("stepsCode").hidden = false; $("stepsCart").hidden = true;
+    $("stepCopy").classList.add("waiting"); $("stepPaste").classList.add("waiting");
+    $("stickerFacts").hidden = true;
+    $("stickerBig").textContent = "Drop a .gb, .gbc or .gba file here, or a .zip with one inside.";
+    $("stickerSmall").textContent = "Or click to choose the file.";
+    $("arrow").textContent = "Step 1";
+    said.textContent = "The button works once a file is in.";
+    advSaid.textContent = "";
+  }
+  function kb(n) { return Math.round(n / 1024).toLocaleString() + " KB"; }
+  function mb(n) { return (n / 1048576 >= 10 ? Math.round(n / 1048576) : Math.round(n / 104857.6) / 10).toLocaleString() + " MB"; }
+
+  // ---- a Game Boy Advance game: what we know of it, then a cartridge folder to save
+  function showAdvance(bytes, fileName) {
+    var info = Workshop.look(bytes, fileName), e = info.entry;
+    advance = { rom: bytes, info: info };
+    $("stepsCode").hidden = true; $("stepsCart").hidden = false;
+    advName.value = info.name;
+    $("stickerBig").textContent = info.name;
+    $("stickerSmall").textContent = "Ready. Step 2 is below.";
+    facts([info.title || info.code, mb(info.size), "Game Boy Advance", info.chip ? "saves" : "no save chip found"]);
+    $("arrow").textContent = "Drop another file to replace it";
+    $("advFolder").textContent = "MekkaBoy_Cart_" + info.id;
+    $("advCommand").textContent = "/mb cart " + info.id.toLowerCase();
+    advSaid.textContent = "The cartridge will take about " + mb(info.size * 2.75) + " on your disk.";
+    var other = info.exact ? "" : " That was another version of it.";
+    var saving = info.chip ? "It saves (" + info.chipWords + ")." : "No save chip was found in it: a game with passwords, or one that does not save.";
+    if (!e) {
+      problem("This is not a game we have tried. It may play, play with faults, or stop.");
+      note(saving + " It plays without sound.");
+    } else if (e.status === "stops") {
+      problem(e.name + " does not run in MekkaBoy yet." + (e.note ? " " + e.note : "") + other + " You can still make the cartridge.");
+      note("");
+    } else {
+      if (info.slow) problem("A heavy game (" + e.weight + " of 10): expect it to run slow.");
+      note((e.status === "played" ? "We have played this game at length in MekkaBoy." : "This game starts and plays in our tests; we have not played it at length yet.") +
+           other + " " + saving + " It plays without sound.");
+    }
+  }
+  function fileSafe(name) { return name.replace(/[\\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim() || "Game"; }
+  // Hand the zip to the viewer: the browser saves it straight away.
+  async function handOver(blob, zipName) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = zipName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+    return "saved";
+  }
+  save.addEventListener("click", function () {
+    if (!advance) return;
+    var info = advance.info, name = Workshop.cleanName(advName.value) || info.name;
+    save.disabled = true;
+    advSaid.textContent = "Making the cartridge folder…";
+    setTimeout(async function () {           // (let the line above be seen first: the cutting takes a moment)
+      try {
+        var folder = "MekkaBoy_Cart_" + info.id;
+        var files = Workshop.cartridge(advance.rom, info.id, name);
+        var blob = new Blob(Workshop.zipParts(folder, files, new Date()), { type: "application/zip" });
+        var zipName = fileSafe(name) + " (MekkaBoy cartridge).zip";
+        advSaid.textContent = "Saving \u201c" + zipName + "\u201d (" + mb(blob.size) + ")\u2026";
+        var went = await handOver(blob, zipName);
+        if (went === "saved") advSaid.textContent = "Saved \u201c" + zipName + "\u201d (" + mb(blob.size) + "). Your browser keeps it with your downloads. Now step 3.";
+        else if (went === "declined") advSaid.textContent = "Not saved. Press the button again when you want it.";
+        else advSaid.textContent = "Another save is still waiting for your answer. Finish that one, then press the button again.";
+      } catch (e) {
+        advSaid.textContent = "The cartridge could not be saved here. Open the Workshop in a current Chrome, Edge or Firefox instead.";
+      }
+      save.disabled = false;
+    }, 30);
+  });
+  advName.addEventListener("input", function () {
+    if (advance) $("stickerBig").textContent = advName.value.trim() || advance.info.name;
+  });
+
+  async function take(f) {
+    if (!f) return;
+    reset(); problem("");
+    if (typeof CompressionStream === "undefined") {
+      problem("This browser is too old for the Workshop. A current Chrome, Edge, Firefox or Safari will do.");
+      return;
+    }
+    $("stickerBig").textContent = "Reading…";
+    $("stickerSmall").textContent = f.name;
+    try {
+      var bytes = new Uint8Array(await f.arrayBuffer()), fileName = f.name;
+      if (bytes[0] === 0x50 && bytes[1] === 0x4B) {
+        var inside = await Workshop.fromZip(bytes);
+        if (!inside) { reset(); problem("There is no .gb, .gbc or .gba game inside that zip file."); return; }
+        bytes = inside.rom; fileName = inside.name;
+      }
+      if (/\.gba$/i.test(fileName) || (Workshop.isAdvance(bytes) && Workshop.refuse(bytes))) {
+        var no = Workshop.refuseAdvance(bytes);
+        if (no) { reset(); problem(no); return; }
+        showAdvance(bytes, fileName);
+        return;
+      }
+      var why = Workshop.refuse(bytes);
+      if (why) { reset(); problem(why); return; }
+      var p = await Workshop.pack(bytes);
+      var hash = await Workshop.sha1(bytes);
+      packed = p;
+      nameBox.value = Workshop.niceName(fileName).slice(0, 40);
+      nameBox.disabled = false; copy.disabled = false;
+      $("stepCopy").classList.remove("waiting"); $("stepPaste").classList.remove("waiting");
+      $("stickerBig").textContent = nameBox.value;
+      $("stickerSmall").textContent = "Ready. Step 2.";
+      var kind = Workshop.mapper(bytes);
+      facts([Workshop.title(bytes) || p.id, kb(p.size), p.cgb ? "Game Boy Color" : "Game Boy", kind || "unknown type"]);
+      $("arrow").textContent = "Drop another file to replace it";
+      said.textContent = "Ready: " + kb(p.payload.length) + " of text.";
+      if (!kind) problem("MekkaBoy does not know this cartridge type, so this game will probably not run. You can still try it.");
+      else if (p.size > 2 * 1024 * 1024) problem("This is a big game. The largest one tested so far is 2 MB, so the paste may freeze the screen for several seconds.");
+      if (hash && Workshop.SOUND[hash]) note("MekkaBoy has a soundtrack recipe for " + Workshop.SOUND[hash] + ". A pasted game is silent; the addon's README explains how to add its sound later.");
+    } catch (e) {
+      reset();
+      problem("That file could not be read. Try the game file itself (.gb, .gbc or .gba) instead.");
+    }
+  }
+
+  file.addEventListener("change", function () { take(file.files[0]); file.value = ""; });
+  ["dragenter", "dragover"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); cart.classList.add("over"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); cart.classList.remove("over"); });
+  });
+  document.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files.length) take(e.dataTransfer.files[0]);
+  });
+
+  nameBox.addEventListener("input", function () {
+    if (packed) $("stickerBig").textContent = nameBox.value.trim() || packed.id;
+  });
+
+  copy.addEventListener("click", function () {
+    if (!packed) return;
+    var text = Workshop.code(packed, nameBox.value.trim() || packed.id);
+    var manual = $("manual");
+    function byHand() {
+      manual.value = text; manual.hidden = false; manual.focus(); manual.select();
+      said.textContent = "Your browser would not copy by itself. The code is selected below: press Ctrl+C.";
+    }
+    try {
+      navigator.clipboard.writeText(text).then(function () {
+        manual.hidden = true;
+        said.textContent = "Copied. Now step 3: back in the game, click the lower box and press Ctrl+V.";
+      }, byHand);
+    } catch (e) { byHand(); }
+  });
+})();
+</script>
+</body>
+</html>

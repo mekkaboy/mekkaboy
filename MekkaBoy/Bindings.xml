@@ -1,0 +1,8 @@
+<Bindings>
+	<Binding name="MEKKABOY_TOGGLE" header="MEKKABOY" category="ADDONS">
+		MekkaBoy_Toggle()
+	</Binding>
+	<Binding name="MEKKABOY_OPTIONS" category="ADDONS">
+		MekkaBoy_Options()
+	</Binding>
+</Bindings>

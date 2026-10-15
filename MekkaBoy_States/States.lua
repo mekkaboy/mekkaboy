@@ -1,0 +1,3 @@
+-- A place for the memory valves of Game Boy Advance games (and the point each
+-- resumes from). They are kept in this addon's saved settings, apart from
+-- MekkaBoy's own, so that logging in does not have to read them.

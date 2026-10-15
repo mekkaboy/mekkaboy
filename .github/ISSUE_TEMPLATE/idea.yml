@@ -1,0 +1,14 @@
+name: Idea
+description: Something you'd like MekkaBoy to do, or a game you'd like tested for link play.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: When you'd use it

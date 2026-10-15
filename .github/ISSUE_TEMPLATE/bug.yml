@@ -1,0 +1,37 @@
+name: Bug report
+description: Something in MekkaBoy or one of its games is broken or wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't paste your SavedVariables files or a link log here: they contain your character name and your party members' names.
+        We do not supply games and will not answer questions about where to find them.
+  - type: textarea
+    id: report
+    attributes:
+      label: What /mb bug says
+      description: Type /mb bug in game, press Ctrl+C in the window, paste it here.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Which game
+      placeholder: City Gates, Pokémon Emerald, none...
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: dropdown
+    id: often
+    attributes:
+      label: How often
+      options: [Every time, Sometimes, Once]

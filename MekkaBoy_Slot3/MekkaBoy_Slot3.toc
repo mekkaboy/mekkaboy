@@ -1,0 +1,7 @@
+## Interface: 16001
+## Title: MekkaBoy - pasted cartridge 3
+## Notes: Holds a game pasted in with /mb import. Read only when that game is played.
+## LoadOnDemand: 1
+## RequiredDeps: MekkaBoy
+## SavedVariables: MekkaBoySlot3
+Slot.lua

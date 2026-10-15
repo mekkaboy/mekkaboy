@@ -1,0 +1,1 @@
+-- A place for one pasted cartridge. The game itself is kept in this addon's saved settings.

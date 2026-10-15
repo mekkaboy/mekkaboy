@@ -1,0 +1,27 @@
+## Interface: 16001
+## Title: MekkaBoy Cartridge - Critter Crate
+## Notes: An original game that comes with MekkaBoy.
+## LoadOnDemand: 1
+## RequiredDeps: MekkaBoy
+## X-MekkaBoy-Cart: CRITTERCRATE
+## X-MekkaBoy-Name: Critter Crate
+## X-MekkaBoy-System: gba
+## X-MekkaBoy-Code: MBCC-0
+rom00.lua
+rom01.lua
+rom02.lua
+rom03.lua
+rom04.lua
+rom05.lua
+rom06.lua
+rom07.lua
+rom08.lua
+rom09.lua
+rom10.lua
+rom11.lua
+rom12.lua
+rom13.lua
+rom14.lua
+rom15.lua
+rom16.lua
+Pack.lua

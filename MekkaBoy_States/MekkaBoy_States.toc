@@ -1,0 +1,7 @@
+## Interface: 16001
+## Title: MekkaBoy - memory valves for Advance games
+## Notes: Holds the memory valves of Game Boy Advance games. Read only when one of those games is played.
+## LoadOnDemand: 1
+## RequiredDeps: MekkaBoy
+## SavedVariables: MekkaBoyStates
+States.lua
