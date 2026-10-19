@@ -75,6 +75,15 @@ function Cable.Family(m)
     if isNative(m) then return "native" end
     return GAMES[codeOf(m)]
 end
+-- A native game may ask for a table of more than two (the mailbox's +141: players wanted, 0 = an ordinary
+-- two-player link). The host of such a table links with up to players-1 guests, all talking only to it.
+function Cable.Seats(m)
+    if Cable.Family(m) ~= "native" then return 0 end
+    local n = m.rd8(LINKBOX + 141)
+    if n < 3 or n > 5 then return 0 end
+    return n
+end
+function Cable.Code(m) return (m and m.rd8) and codeOf(m) or "" end
 
 local Ghost = {}
 Ghost.__index = Ghost
@@ -123,7 +132,11 @@ local function said(g)
         for i = 3, 8 do if c[i] ~= 0 then idle = false break end end
     end
     if idle then
+        local had = g.run
         flush(g)
+        -- (the game has stopped talking: what it said goes now, not after the wire's short wait for more. In a
+        -- battle every step waits for the other side's answer, so each hop saved is felt)
+        if had and g.hurry then g.hurry() end
         if g.quiet < 255 then g.quiet = g.quiet + 1 end
         return
     end
@@ -326,6 +339,9 @@ end
 -- other console's first answer, which the games allow only a few seconds for. `now` is the time in
 -- seconds. Whoever runs the game asks this before each frame, and skips the frame on true.
 function Ghost:waiting(now)
+    -- (the other player's game has stopped: this one waits for it, however long, rather than carry on alone; the
+    -- link decides when it has waited long enough, GB/Link.lua)
+    if self.partnerAway and (self.phase == "data" or self.phase == "hand") then return true end
     local want = false
     if self.phase == "data" then
         -- joined, said its piece, and nothing has come back yet
@@ -358,40 +374,54 @@ function Ghost:detach()
 end
 
 -- ------------------------------------------------- the stand-in for MekkaBoy's own games ---
+-- At a table of more than two, the host's stand-in is plugged into every guest at once: each message the game
+-- sends names a seat (+11: 1..4 one guest, anything else everyone), and each message handed in says which seat
+-- it came from (+140). The status byte carries this console's seat (bits 2-4) and +142 the seats now linked.
 local Native = {}
 Native.__index = Native
-function Native:tx(kind, rest) self.send(kind .. (rest or "")) end
+function Native:tx(kind, rest, to) self.send(kind .. (rest or ""), to) end
+local function nativeStatus(g)
+    local m = g.m
+    m.wr8(LINKBOX + 4, 1 + (g.host and 2 or 0) + 4 * (g.seat or 0))
+    m.wr8(LINKBOX + 142, g.mask or 1)
+end
 local function nativePoll(g)
     local m = g.m
     if m.rd32(LINKBOX) ~= 0x4B4C424D then return end
+    if g.seats then nativeStatus(g) end
     -- something to send?
     local outSeq, outAck = m.rd8(LINKBOX + 5), m.rd8(LINKBOX + 7)
     if outSeq ~= outAck then
         local len = m.rd8(LINKBOX + 6)
         local t = {}
         for i = 0, len - 1 do t[i + 1] = char(m.rd8(LINKBOX + 12 + i)) end
-        g:tx("N", concat(t))
+        local to = m.rd8(LINKBOX + 11)
+        if to < 1 or to > 4 then to = nil end
+        g:tx("N", concat(t), to)
         m.wr8(LINKBOX + 7, outSeq)
         g.sent = g.sent + 1
     end
     -- room for the next message that has arrived?
     local inSeq, inAck = m.rd8(LINKBOX + 8), m.rd8(LINKBOX + 10)
     if inSeq == inAck and g.rxHead <= g.rxTail then
-        local msg = g.rx[g.rxHead]
-        g.rx[g.rxHead] = nil
+        local msg, from = g.rx[g.rxHead], g.fromOf[g.rxHead] or 0
+        g.rx[g.rxHead], g.fromOf[g.rxHead] = nil, nil
         g.rxHead = g.rxHead + 1
         for i = 1, #msg do m.wr8(LINKBOX + 12 + LINK_MAX + i - 1, byte(msg, i)) end
+        m.wr8(LINKBOX + 140, from)
         m.wr8(LINKBOX + 9, #msg)
         m.wr8(LINKBOX + 8, (inSeq + 1) % 256)
         g.got = g.got + 1
     end
 end
-function Native:receive(msg)
+-- from: the seat the message came from (the host's stand-in knows; a guest's hears only the host, seat 0)
+function Native:receive(msg, from)
     local kind, rest = msg:sub(1, 1), msg:sub(2)
     if kind == "N" then
         if #rest > LINK_MAX then rest = rest:sub(1, LINK_MAX) end
         self.rxTail = self.rxTail + 1
         self.rx[self.rxTail] = rest
+        self.fromOf[self.rxTail] = from or 0
     elseif kind == "H" then
         if not self.saidJoined then self.saidJoined = true if self.note then self.note("joined") end end
     end
@@ -400,14 +430,21 @@ function Native:busy() return true end
 function Native:blocksKey() return false end
 function Native:detach()
     self.m.wr8(LINKBOX + 4, 0)
+    if self.seats then self.m.wr8(LINKBOX + 142, 0) end
     self.m.linkPlug(nil)
+end
+-- a table's seats changed (the host: a guest came or went); mask has bit 0 for the host and bit k for seat k
+function Native:setMembers(mask)
+    self.mask = mask
+    if self.m.rd32(LINKBOX) == 0x4B4C424D then nativeStatus(self) end
 end
 local function attachNative(m, opts)
     local g = setmetatable({ m = m, host = opts.host and true or false, send = opts.send, note = opts.note, phase = "data",
-                             round = 0, epoch = 0, rx = {}, rxHead = 1, rxTail = 0, sent = 0, got = 0 }, Native)
+                             round = 0, epoch = 0, rx = {}, fromOf = {}, rxHead = 1, rxTail = 0, sent = 0, got = 0,
+                             seats = opts.seats, seat = opts.seat or 0, mask = opts.members }, Native)
     g.plug = { parent = g.host, present = true, exchange = function() return nil end,
                line = function(line) if line == 0 then nativePoll(g) end end }
-    m.wr8(LINKBOX + 4, 1 + (g.host and 2 or 0))
+    if g.seats then nativeStatus(g) else m.wr8(LINKBOX + 4, 1 + (g.host and 2 or 0)) end
     m.linkPlug(g.plug)
     g:tx("H")
     return g
@@ -418,12 +455,15 @@ end
 --   opts.send    function(message) carries a message to the other stand-in, in order and intact
 --   opts.note    function(what) optional: "there", "away", "joined", "closed"
 --   opts.round   optional: the last stand-in's .round, when a game is plugged in again mid-session
+--   (a table of more than two, native games only:) opts.seats players at the table, opts.seat this console's seat
+--                (0 = the host), opts.members the bit mask of seats linked; opts.send(message, seat) where seat is
+--                1..4 for one guest or nil for everyone (a guest's messages always go to the host)
 -- Returns the stand-in, or nil if this game's link is not supported.
 function Cable.Attach(m, opts)
     local fam = Cable.Family(m)
     if not fam then return nil end
     if fam == "native" then return attachNative(m, opts) end
-    local g = setmetatable({ m = m, host = opts.host and true or false, send = opts.send, note = opts.note,
+    local g = setmetatable({ m = m, host = opts.host and true or false, send = opts.send, note = opts.note, hurry = opts.hurry,
                              phase = "off", localOn = false, remoteOn = false, round = opts.round or 0, remoteRound = 0, frame = 0, openedAt = 0 }, Ghost)
     reset(g)
     if g.host then attachParent(g) else attachChild(g) end

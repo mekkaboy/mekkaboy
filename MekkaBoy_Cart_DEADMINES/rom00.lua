@@ -1,0 +1,4 @@
+-- A MekkaBoy Advance cartridge, written by gba2lua.py. Your own copy of a game: do not share.
+local _, C = ...
+if not (MekkaBoy and MekkaBoy.NewCartridge) then return end
+C.banks = MekkaBoy.NewCartridge({ id = "DEADMINES", name = "Deadmines Hold'em", numBanks = 13, system = "gba", size = 212992, chip = "sram" })

@@ -9,7 +9,7 @@
   "sound": "shared",
   "sounds": 107,
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "A7KE-0": {
@@ -22,7 +22,7 @@
   "sound": "shared",
   "sounds": 274,
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 3
  },
  "AMKE-0": {
@@ -35,7 +35,7 @@
   "sound": "shared",
   "sounds": 289,
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 8
  },
  "AX4E-1": {
@@ -46,7 +46,7 @@
   "name": "Super Mario Advance 4: Super Mario Bros. 3",
   "sound": "own",
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 3
  },
  "AXPE-2": {
@@ -57,7 +57,7 @@
   "name": "Pokemon Sapphire",
   "sound": "exact",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "AXVE-0": {
@@ -68,7 +68,7 @@
   "name": "Pokemon Ruby",
   "sound": "exact",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "B24E-0": {
@@ -79,7 +79,7 @@
   "name": "Pokemon Mystery Dungeon: Red Rescue Team",
   "sound": "exact",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 8
  },
  "B3SE-0": {
@@ -92,7 +92,7 @@
   "sound": "shared",
   "sounds": 225,
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 3
  },
  "BOCE-0": {
@@ -103,7 +103,7 @@
   "name": "The Urbz: Sims in the City",
   "sound": "own",
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 4
  },
  "BPEE-0": {
@@ -114,7 +114,7 @@
   "name": "Pokemon Emerald",
   "sound": "exact",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "BPGE-1": {
@@ -125,7 +125,7 @@
   "name": "Pokemon LeafGreen",
   "sound": "exact",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 2
  },
  "BPRE-0": {
@@ -136,7 +136,7 @@
   "name": "Pokemon FireRed",
   "sound": "exact",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 2
  },
  "BZME-0": {
@@ -149,7 +149,7 @@
   "sound": "shared",
   "sounds": 446,
   "status": "starts",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 3
  },
  "MBAA-0": {
@@ -160,18 +160,18 @@
   "name": "Azeroth Adventurers",
   "sound": "native",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "MBCC-0": {
-  "checked": "2026-10-14",
+  "checked": "2026-10-18",
   "chip": "sram",
   "cost": 0.5,
   "id": "CRITTERCRATE",
   "name": "Critter Crate",
   "sound": "native",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "MBCG-0": {
@@ -182,40 +182,51 @@
   "name": "Cogling",
   "sound": "native",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
+  "weight": 1
+ },
+ "MBDH-0": {
+  "checked": "2026-10-18",
+  "chip": "sram",
+  "cost": 0.9,
+  "id": "DEADMINES",
+  "name": "Deadmines Hold'em",
+  "sound": "native",
+  "status": "played",
+  "version": "0.16.0",
   "weight": 1
  },
  "MBGT-0": {
-  "checked": "2026-10-14",
+  "checked": "2026-10-18",
   "chip": "sram",
-  "cost": 0.2,
+  "cost": 0.3,
   "id": "CITYGATES",
   "name": "City Gates",
   "sound": "native",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "MBGW-0": {
-  "checked": "2026-10-13",
+  "checked": "2026-10-18",
   "chip": "sram",
-  "cost": 0.4,
+  "cost": 0.6,
   "id": "GEARWORKS",
   "name": "Gearworks",
   "sound": "native",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  },
  "MBOV-0": {
-  "checked": "2026-10-14",
+  "checked": "2026-10-18",
   "chip": "sram",
-  "cost": 0.3,
+  "cost": 0.7,
   "id": "OVERLOAD",
   "name": "Overload",
   "sound": "native",
   "status": "played",
-  "version": "0.15.4",
+  "version": "0.16.0",
   "weight": 1
  }
 }

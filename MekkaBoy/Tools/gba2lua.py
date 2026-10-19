@@ -49,7 +49,7 @@ def convert(path, addons, cid=None, name=None, quiet=False):
     name = name or default_name(path)
     say = (lambda *a: None) if quiet else print
     chip, chipWords = save_chip(rom)
-    say('Saves to: %s' % (chipWords or 'nothing MekkaBoy recognises (a game with passwords, or without saving): if it does save, tell us which game'))
+    say('Saves to: %s' % (chipWords or 'nothing MekkaBoy recognizes (a game with passwords, or without saving): if it does save, tell us which game'))
     if chip == 'flash128': chip = None           # (what MekkaBoy assumes when a cartridge does not say)
     if size % BANK: rom += b'\xff' * (BANK - size % BANK)
     banks = [rom[i:i + BANK] for i in range(0, len(rom), BANK)]

@@ -36,22 +36,44 @@ local function at(region, x, y, w, h)
 end
 
 -- ---------------------------------------------------------------- art ---
--- cogs first (behind the body); they turn while a game is running
-local gears = {}
-for i, key in ipairs({ "gear1", "gear2" }) do
-    local g = Lay[key]
-    local t = win:CreateTexture(nil, "BACKGROUND")
-    t:SetTexture(ART .. "gear.tga")
-    at(t, g[1] - g[3], g[2] - g[3], g[3] * 2)
-    gears[i] = { tex = t, dir = (i == 1) and 1 or -1.75, angle = (i == 1) and 0 or 0.26 }
-    t:SetRotation(gears[i].angle)
+-- The body comes in colorways, one picture each (Tools/gen_art.py): /mb color, or the settings page.
+MB.Colorways = { "gunmetal", "midnight", "arcane", "verdant", "ivory", "rosegold" }
+MB.ColorwayNames = { gunmetal = "Gunmetal", midnight = "Midnight", arcane = "Arcane", verdant = "Verdant", ivory = "Ivory", rosegold = "Rose Gold" }
+local function colorway()
+    local opt = MB.DB().opt
+    if opt.colourway ~= nil then      -- (0.20.0 and earlier kept it under the British spelling)
+        if opt.colorway == nil then opt.colorway = opt.colourway end
+        opt.colourway = nil
+    end
+    local c = MB.Opt("colorway", "gunmetal")
+    return MB.ColorwayNames[c] and c or "gunmetal"
 end
 
--- the body picture hangs over the frame's edges (pipe, cogs, steam stack)
+-- the body picture hangs a little over the frame's edges (the shoulder buttons)
 local body = win:CreateTexture(nil, "ARTWORK")
-body:SetTexture(ART .. "body.tga")
+body:SetTexture(ART .. "body_gunmetal.tga")
 body:SetTexCoord(0, 1, 0, Lay.usedH / Lay.canvasH)
 at(body, -Lay.bodyX, -Lay.bodyY, Lay.canvasW, Lay.usedH)
+
+function MB.SetColorway(name)
+    name = name and name:lower():gsub("[%s%-]", "")
+    if not (name and MB.ColorwayNames[name]) then return false end
+    MB.DB().opt.colorway = name
+    body:SetTexture(ART .. "body_" .. name .. ".tga")
+    return true
+end
+function MB.Colorway() return colorway() end
+MB.onLogin[#MB.onLogin + 1] = function() body:SetTexture(ART .. "body_" .. colorway() .. ".tga") end
+-- /mb color <name>: the console's colorway. GB/Console.lua owns the /mb color command, which also takes lcd|raw for
+-- the Game Boy Color screen, and hands every other word here.
+function MB.ColorwayCommand(rest)
+    rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local list = {}
+    for _, c in ipairs(MB.Colorways) do list[#list + 1] = MB.ColorwayNames[c] end
+    if rest == "" then MB.Print(("The console is %s. /mb color <name>: %s."):format(MB.ColorwayNames[colorway()], table.concat(list, ", "))) return end
+    if MB.SetColorway(rest) then MB.Print(("The console is %s now."):format(MB.ColorwayNames[colorway()]))
+    else MB.Print(("No color called %s. Pick one of: %s."):format(rest, table.concat(list, ", "))) end
+end
 
 -- ------------------------------------------------------------- screen ---
 local scr = Lay.screen
@@ -174,12 +196,6 @@ win:SetScript("OnUpdate", function(_, elapsed)
         needleAt = (math.abs(needleWant - needleAt) < 0.3) and needleWant or (needleAt + step)
         needle:SetRotation(-rad(needleAt))
     end
-    if powered then
-        for _, g in ipairs(gears) do
-            g.angle = g.angle + elapsed * 0.9 * g.dir
-            g.tex:SetRotation(g.angle)
-        end
-    end
 end)
 
 -- ------------------------------------------------------------ buttons ---
@@ -203,7 +219,7 @@ local function keyOf(button)
     return k and ("Key: " .. k) or nil
 end
 
--- a clickable patch of the body: x, y = centre
+-- a clickable patch of the body: x, y = center
 local function hot(name, cx, cy, w, h, glowSize, r, g, b)
     local btn = CreateFrame("Button", nil, win)
     at(btn, cx - w / 2, cy - h / 2, w, h)
@@ -290,8 +306,10 @@ do
     btn:SetScript("OnClick", function() MB.Hide() end)
     c = Lay.help
     btn = hot("help", c[1], c[2], c[3] * 2 + 4, c[3] * 2 + 4, 36, 1, 0.9, 0.5)
-    tip(btn, "MekkaBoy", function() return MB.HelpText and MB.HelpText() or "/mb help" end)
-    btn:SetScript("OnClick", function() if MB.commands.help then MB.commands.help.run("") end end)
+    tip(btn, "MekkaBoy", function() return (MB.HelpText and MB.HelpText() or "/mb help") .. "\nClick: show or hide the keys." end)
+    btn:SetScript("OnClick", function()
+        if MB.ToggleKeyDrawer then MB.ToggleKeyDrawer() elseif MB.commands.help then MB.commands.help.run("") end
+    end)
 end
 
 do

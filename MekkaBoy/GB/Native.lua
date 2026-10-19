@@ -70,7 +70,7 @@ function Sys.stop(m)
     m.holder:Hide()
     m.holder:SetParent(nil)
 end
-function Sys.colour(c) return 0, 0, 0 end
+function Sys.color(c) return 0, 0, 0 end
 function Sys.pack(st) return st end
 function Sys.unpack(st) return st end
 function Sys.statesFor() return {} end

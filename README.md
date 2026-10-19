@@ -1,11 +1,13 @@
 # MekkaBoy (beta)
 
+Current version: 0.20.1 beta.
+
 A Game Boy, Game Boy Color and Game Boy Advance emulator addon for WoW Forever.
 Website: https://mekkaboy.com · Download: https://www.curseforge.com/wow/addons/mekkaboy
 
 This repository is the addon exactly as it ships: the `MekkaBoy` folder, its helper
-folders, and the four original games. To install from here, download the repository
-as a zip and put the ten folders into your `Interface\AddOns` folder (or use the
+folders, and the five original games. To install from here, download the repository
+as a zip and put the eleven folders into your `Interface\AddOns` folder (or use the
 CurseForge app, which does it for you).
 
 **Reporting a bug:** type `/mb bug` in game and open an issue with what it shows,
@@ -23,10 +25,10 @@ opens on your screen, with a shelf of cartridges, four memory valves for save
 states, rewind and fast-forward. It closes itself in combat and pauses for ready
 checks, queues, summons, trades, duels and flight landings.
 
-MekkaBoy ships with four original games and no others. A game ROM you own can be
+MekkaBoy ships with five original games and no others. A game ROM you own can be
 added through the Workshop (https://workshop.mekkaboy.com). A game you add plays
 **without sound** unless you record a soundtrack pack from your own copy with the
-tools in the download (see Sound); the four included games have their music.
+tools in the download (see Sound); the five included games have their music.
 
 Not affiliated with, endorsed or sponsored by Nintendo or Blizzard
 Entertainment. Game Boy, Game Boy Color and Game Boy Advance are trademarks of
@@ -39,17 +41,20 @@ side by side: `MekkaBoy`, the `MekkaBoy_Slot1` to `4` and `MekkaBoy_States`
 helpers, and one `MekkaBoy_Cart_...` folder per game that comes with it. Start
 the game client afterwards (a new folder needs a full start, not `/reload`).
 
-## The four games that come with it
+## The five games that come with it
 
 Each is a cartridge on the shelf (Select while the console is off or paused,
-or `/mb carts`). All four are in beta: they play start to finish and will keep
+or `/mb carts`). All five are in beta: they play start to finish and will keep
 changing.
 
+- **Deadmines Hold'em** - Texas Hold'em below decks against a crew of Defias
+  card sharks: five decks of stakes and a daily wheel, chips only, no money of
+  any kind. Played on your own for now; multiplayer tables are coming.
 - **City Gates** - tower defense at the gates of all six capitals.
 - **Critter Crate** - a crate arrives and something inside is scratching. Raise
   what comes out.
-- **Overload** - blackjack at a gnomish card table, against the house or a
-  friend over the link.
+- **Overload** - blackjack in a Booty Bay den, against the house or a friend
+  over the link.
 - **Gearworks** - falling cogs; over the link, the lines you clear land in the
   other player's machine.
 
@@ -64,6 +69,9 @@ changing.
   pause the game and say why on its screen: a ready check, a queue that pops,
   a summon, a resurrect offer, a group invite, a duel, a trade window, and
   your flight landing. Each can be switched off in the settings.
+- The console comes in six colorways: Gunmetal, Midnight, Arcane, Verdant,
+  Ivory and Rose Gold (`/mb color <name>`, or the Color slider in the
+  settings).
 
 | Button | Key |
 |---|---|
@@ -110,13 +118,17 @@ ask others for theirs.
 Games save as they did on the real thing. Saves, memory valves and the
 "resume where I left off" point are kept with the addon's settings, which the
 game client writes when you log out or `/reload`; do one of those before
-closing the client. Rewind keeps the last 40 seconds of a Game Boy game
+closing the client. The five games that come with MekkaBoy keep one save for
+each character and tell the time by the realm's clock, which the server keeps
+(Critter Crate's pets live in real time, so your computer's clock does not
+move them; `/mb clock` shows the realm's time beside your computer's). A game made from your own copy keeps one save for the whole
+account, on your computer's clock. Rewind keeps the last 40 seconds of a Game Boy game
 (`/mb rewind 90` keeps more). Cheats: GameShark and Game Genie codes for Game
 Boy games, `/mb cheat add <code>`.
 
 ## Sound
 
-The four games that come with MekkaBoy have their music and sounds. A game you
+The five games that come with MekkaBoy have their music and sounds. A game you
 add plays silently: an addon cannot make sound, only play sound files, so
 sound for your own game needs a soundtrack pack recorded from your own copy
 with the Python tools in the `Tools` folder (`soundpack.py`,
@@ -129,15 +141,30 @@ another window is in front (`/mb sound background off` to stop that).
 
 ## Link play
 
-Two players in a party who both have MekkaBoy can connect their consoles with
-`/mb link`, for supported games: the games' own trade and battle rooms, as
-with a link cable, through party chat. Whoever typed it first leads, and the
-chat window says where each of you should go. `/mb tested` and the Workshop
+Two players who both have MekkaBoy and their own copy of a game can connect
+their consoles for supported games: the games' own trade and battle rooms, as
+with a link cable. No party is needed: `/mb link <name>` asks the other
+player, who answers with `/mb link` (in a party, both of you just type
+`/mb link`). Whoever typed it first leads, and the chat window says where each
+of you should go. `/mb tested` and the Workshop
 page say which games link. It works in the open world; the game client does
 not carry addon messages during boss fights, keystone runs or PvP matches.
 `/mb link off` ends it. Each console runs its own copy of the game; when the
 game reaches for the cable, MekkaBoy stands in for the other console and sends
 only what changes hands. Rewind and memory valves are off while a link is open.
+
+If the other player's game stops in the middle of a trade or a battle (they
+go offline, pause, or hit a loading screen), yours waits for them instead of
+finishing on its own, so a trade can't complete on one side only. If they are
+gone for a minute, the link closes; type `/mb reset` if your game then shows a
+communication error.
+
+## Together Mode (experimental)
+
+In the Pokémon games, `/mb together <name>` lets you and a friend see each
+other's trainer walking in your own copies of the game (they add you too).
+Walk up to theirs and the game tells you how to link. `/mb together why` says
+what is happening, `/mb together off` stops it.
 
 ## Limits
 
@@ -151,5 +178,6 @@ only what changes hands. Rewind and memory valves are off while a link is open.
 ## Rules this addon follows
 
 It is free, its code is readable, it shows no advertisements and asks for
-nothing in game. It sends addon messages only to players you are grouped with
-and only while a link is open, plus a one-line version check.
+nothing in game. It sends addon messages only to players you choose (your
+party, or someone you name with `/mb link` or `/mb together`), only while that
+is open, plus a one-line version check.

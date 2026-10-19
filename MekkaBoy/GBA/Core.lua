@@ -67,7 +67,7 @@ end
 -- --------------------------------------------------------------------- the bus ---
 -- Working memory is kept as whole 32-bit words (most of what a game does with
 -- it is 32-bit); picture memory as bytes, with a second copy split into
--- 4-bit dots for the screen painter; colours and sprite records as 16-bit.
+-- 4-bit dots for the screen painter; colors and sprite records as 16-bit.
 local function buildBus(S)
     local iw, ew = zeros(8192), zeros(65536)
     local vram, vnib, vrow = zeros(0x18000), zeros(0x30000), zeros(0x6002)
@@ -316,7 +316,7 @@ local function buildBus(S)
         cControl = t.cControl
         biosBus = t.biosBus or 0xE25EF004       -- (older photographs: as after an interrupt, which is nearly always so)
         for i = 1, 7 do cTime[i] = t.cTime[i] or 0 end
-        -- everything worked out from picture memory and the colours
+        -- everything worked out from picture memory and the colors
         for o = 0, 0x17FFF do
             local v = vram[o]
             local lo = v % 16
@@ -2266,7 +2266,7 @@ local function buildPPU(S)
     end
 
     -- one line of an ordinary tiled background
-    local vcls = S.vcls         -- per row of a 16-colour tile: nil not looked at yet, 0 empty, 1 no gaps, 2 some gaps
+    local vcls = S.vcls         -- per row of a 16-color tile: nil not looked at yet, 0 empty, 1 no gaps, 2 some gaps
     -- (x0, x1: draw only that strip of the line. Answers true if the whole row was blank.)
     local function textBG(n, y, o, fb, pal, x0, x1)
         local cnt = io[8 + n * 2]
@@ -2777,11 +2777,11 @@ local function buildPPU(S)
     end
 
     -- ---- the middle way: layers mixed, but nothing masked off ----
-    -- Where layers mix, every colour is drawn with its layer's number tucked in above it
-    -- (colour + layer * 32768), so what lies under a mixing layer is known for free. Those tags are
-    -- left in the finished picture: whoever shows it must take colours "mod 32768".
+    -- Where layers mix, every color is drawn with its layer's number tucked in above it
+    -- (color + layer * 32768), so what lies under a mixing layer is known for free. Those tags are
+    -- left in the finished picture: whoever shows it must take colors "mod 32768".
     -- A whole-layer fade toward white or black needs no tags at all: the layer is simply drawn
-    -- with an already-faded set of colours.
+    -- with an already-faded set of colors.
     local palL, palLFor = {}, -1
     for l = 0, 4 do palL[l] = {} end
     local palF, palFFor = {}, ""
@@ -2892,7 +2892,7 @@ local function buildPPU(S)
     end
 
     -- ---- has this line changed at all? ----
-    -- Each line remembers when it was last drawn. If no control register, colour or (relevant) sprite
+    -- Each line remembers when it was last drawn. If no control register, color or (relevant) sprite
     -- has changed since, and none of the map cells and tile pictures that show on it have been written
     -- to, the line on the screen is still right and is left alone. Speech boxes, menus and standing
     -- still all leave most lines untouched.
@@ -3724,7 +3724,7 @@ end
 -- Everything needed to put the machine back exactly as it stands between two
 -- frames: memory, the processor, the timers, the save chip. The big tables
 -- are packed as text that a settings file can hold: hex, with the long blank
--- runs counted rather than spelt out (most of a console's memory is blank,
+-- runs counted rather than spelled out (most of a console's memory is blank,
 -- so a photograph comes to about a tenth of a megabyte). Translated code is
 -- not included (see the processor).
 local PACK = {}

@@ -99,6 +99,13 @@ Wire.pack, Wire.unpack = pack, unpack_
 --            including our own frames when the channel echoes them back to us)
 -- opts.room  optional: bytes a frame may hold (default 255)
 -- opts.lost()   optional: the other end has stopped answering
+-- opts.share  optional: lanes from Wire.Lanes, shared with other wires this end runs at the same time (a table's
+--             host has one wire per guest, and the server counts all of them together)
+function Wire.Lanes(n, now)
+    local t = {}
+    for i = 1, n or 1 do t[i] = { tokens = BURST, tokenAt = now(), holdUntil = 0 } end
+    return t
+end
 function Wire.New(opts)
     local w = setmetatable({
         send = opts.send, deliver = opts.deliver, now = opts.now, id = opts.id, peer = opts.peer or opts.id, lost = opts.lost,
@@ -111,16 +118,21 @@ function Wire.New(opts)
         lanes = {}, lane = 0,
         frames = 0, resent = 0, refused = 0, dead = false,
     }, Wire)
-    for i = 1, opts.lanes or 1 do w.lanes[i] = { tokens = BURST, tokenAt = opts.now(), holdUntil = 0 } end
+    if opts.share then w.lanes = opts.share else w.lanes = Wire.Lanes(opts.lanes, opts.now) end
     return w
 end
 
 -- queue a message for the other end
-function Wire:push(msg)
+-- (beat: only a sign of life, which leaves pushedAt, the time of the last real message, alone)
+function Wire:push(msg, beat)
     local n = #msg
     self.out = self.out .. char(floor(n / 256), n % 256) .. msg
     self.outAt = self.outAt or self.now()
+    if not beat then self.pushedAt = self.now() end
 end
+
+-- everything queued may go at once, without the short wait for more (the sender knows nothing more is coming)
+function Wire:hurry() self.now_ = true self:tick() end
 
 -- find a lane with allowance left and take one frame's worth from it
 local function spend(w)
@@ -186,15 +198,22 @@ function Wire:tick()
         return
     end
     -- 2. new frames
+    local waited = false
     while #self.out > 0 and outstanding(self) < WINDOW do
-        if #self.out < self.room - 8 and now - self.outAt < LINGER then break end
+        if #self.out < self.room - 8 and now - self.outAt < LINGER and not self.now_ then break end
         local text, stop = pack(self.out, 1, self.room)
-        if not transmit(self, self.next, text) then break end
+        if not transmit(self, self.next, text) then waited = true break end
         self.sent[self.next] = { text = text, at = now, tries = 1 }
         self.next = (self.next + 1) % SEQS
         self.out = sub(self.out, stop)
         self.outAt = (#self.out > 0) and now or nil
     end
+    self.now_ = nil
+    -- (time spent with something to say and no allowance left to say it: the server's limit, felt)
+    if (waited or (#self.out > 0 and outstanding(self) >= WINDOW)) and self.tickAt then
+        self.starved = (self.starved or 0) + (now - self.tickAt)
+    end
+    self.tickAt = now
     -- 3. a bare "got it"
     if self.ackDue and now - self.ackDue > ACK_WAIT then
         transmit(self, NO_DATA, "")
@@ -219,7 +238,16 @@ function Wire:receive(frame)
     -- what the other end has got lets go of our copies
     local gone = (ack - self.base) % SEQS
     if gone > 0 and gone <= outstanding(self) then
+        local now = self.now()
         for _ = 1, gone do
+            -- (how long a frame took to be answered: the line's round trip, plus up to ACK_WAIT when the other end
+            -- had nothing to say back; frames sent more than once tell us nothing)
+            local e = self.sent[self.base]
+            if e and e.tries == 1 then
+                local r = now - e.at
+                self.rtt = self.rtt and (self.rtt * 0.9 + r * 0.1) or r
+                self.rttLow = math.min(self.rttLow or r, r)
+            end
             self.sent[self.base] = nil
             self.base = (self.base + 1) % SEQS
         end

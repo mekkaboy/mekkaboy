@@ -1,5 +1,5 @@
 -- Runs the game on the console: pixels, keys, pacing, save states, rewind,
--- fast-forward, cheats, colours, and the cartridge slot. Games are cartridges
+-- fast-forward, cheats, colors, and the cartridge slot. Games are cartridges
 -- (GB/Carts.lua), each made from a ROM you own.
 --
 -- One console plays three kinds of cartridge. Game Boy and Game Boy Color
@@ -65,7 +65,7 @@ local BUTTON_NAMES = {
 local STATE_KEYS = { F1 = 1, F2 = 2, F3 = 3, F4 = 4 }   -- load; with Shift: save
 local PAD = { up = true, down = true, left = true, right = true, a = true, b = true, start = true, select = true, l = true, r = true }
 
--- Palettes for original (monochrome) Game Boy games: four 15-bit colours, lightest first.
+-- Palettes for original (monochrome) Game Boy games: four 15-bit colors, lightest first.
 local function rgb15(r, g, b) return floor(r / 8) + floor(g / 8) * 32 + floor(b / 8) * 1024 end
 local PALETTES = {
     gray   = { rgb15(255, 255, 255), rgb15(170, 170, 170), rgb15(85, 85, 85), rgb15(0, 0, 0) },
@@ -78,7 +78,7 @@ local PALETTES = {
     ember  = { rgb15(255, 246, 211), rgb15(249, 168, 117), rgb15(235, 107, 111), rgb15(124, 63, 88) },
 }
 local PALETTE_ORDER = { "gray", "green", "pocket", "brown", "blue", "red", "ember" }
--- A Game Boy Color picks colours for some original Game Boy games by itself:
+-- A Game Boy Color picks colors for some original Game Boy games by itself:
 -- one palette for the background and one for each of the two sprite layers.
 -- These are the choices it makes for the games listed.
 local GAME_PALETTES = {
@@ -116,6 +116,7 @@ local running = false                -- is the game advancing (as opposed to pau
 
 -- -------------------------------------------------------------- state ---
 local machine, saveKey
+local storeKey                       -- where its save, valves and resume point are kept (MB.SaveKey: ours keep one per character)
 local grids = {}                     -- one screenful of dots for each kind of machine, made when first needed
 local grid                           -- the one in use: { holder, rows, tex, shown, RC, GC, BC }
 local keymap = {}                    -- key name -> button
@@ -136,7 +137,7 @@ local owed, frameCost = 0, 4
 local pictureEvery, sinceDrawn = 1, 0
 local costDrawn, costBlind, costPaint, blindSeen = 4, 2, 1, false     -- running averages, ms
 local scanAll = true                 -- the next picture must check every line, not only those the game redrew
-local setColour                      -- the textures' SetVertexColor, fetched once
+local setColor                      -- the textures' SetVertexColor, fetched once
 local statFrames, statTime = 0, 0
 local frameNo = 0
 local broken = false
@@ -285,18 +286,18 @@ local function buildScreen()
                 end
             end
         end
-        setColour = tex[1].SetVertexColor
+        setColor = tex[1].SetVertexColor
         grids[sys.kind] = g
         applyBuffering()
     end
-    for _, other in pairs(grids) do other.holder:SetShown(other == g) end
+    for _, other in pairs(grids) do other.holder:SetShown(other == g) if other.labelFrame then other.labelFrame:SetShown(other == g) end end
     grid = g
     scanAll = true
 end
 
--- 15-bit Game Boy colour -> what to show. "lcd" imitates the washed, slightly
--- cross-mixed colours of the real Game Boy Color screen; "raw" is the plain value.
-function GBSYS.colour(c, RC, GC, BC)
+-- 15-bit Game Boy color -> what to show. "lcd" imitates the washed, slightly
+-- cross-mixed colors of the real Game Boy Color screen; "raw" is the plain value.
+function GBSYS.color(c, RC, GC, BC)
     local r5 = c % 32
     local g5 = ((c - r5) / 32) % 32
     local b5 = (c - r5 - g5 * 32) / 1024
@@ -312,25 +313,65 @@ function GBSYS.colour(c, RC, GC, BC)
     return r
 end
 
--- Put the game's picture on the screen. Only dots whose colour changed are
+-- Names over friends' ghosts (GBA/Ghosts.lua): small labels anchored to the dot above each ghost's head
+local function placeLabels(g, labels)
+    local pool = g.labels
+    local n = labels and #labels or 0
+    if not pool then
+        if n == 0 then return end                                -- (made only once a label is needed)
+        pool = {} g.labels = pool
+        -- (a frame of its own, above the rows of dots: a frame's own text would be drawn under its child frames;
+        -- beside the holder rather than inside it, since the holder's children are the rows)
+        local lf = CreateFrame("Frame", nil, screen)
+        lf:SetAllPoints(g.holder)
+        lf:SetFrameLevel(g.holder:GetFrameLevel() + 2)
+        g.labelFrame = lf
+    end
+    for i = 1, n do
+        local fs = pool[i]
+        if not fs then
+            fs = g.labelFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            fs:SetTextColor(1, 0.95, 0.8)
+            fs:SetShadowColor(0, 0, 0, 1)
+            pool[i] = fs
+        end
+        local l = labels[i]
+        local x = math.max(12, math.min(sys.W - 12, floor(l.x + 0.5)))
+        local y = math.max(7, math.min(sys.H, floor(l.y + 0.5)))      -- (never above the top edge of the screen)
+        fs:SetText(l.name)
+        fs:ClearAllPoints()
+        fs:SetPoint("BOTTOM", g.holder, "TOPLEFT", x * CELL, -y * CELL)
+        fs:Show()
+    end
+    for i = n + 1, #pool do pool[i]:Hide() end
+end
+
+-- Put the game's picture on the screen. Only dots whose color changed are
 -- touched, and only lines the game says it redrew are even looked at.
 local function present()
     local g = grid
     local fb, dirty = machine.fb, machine.lineDirty
-    local shown, tex, RC, GC, BC, set = g.shown, g.tex, g.RC, g.GC, g.BC, setColour
-    local colourOf = sys.colour
+    local shown, tex, RC, GC, BC, set = g.shown, g.tex, g.RC, g.GC, g.BC, setColor
+    local colorOf = sys.color
     local W, H = sys.W, sys.H
     local all = scanAll or not dirty
     scanAll = false
+    local over, overLines
+    if MB.Ghosts then
+        local gok, o, l = pcall(MB.Ghosts.Overlay, machine)
+        if gok then over, overLines = o, l else MB.Ghosts.Fail(o) end
+        placeLabels(g, MB.Ghosts.labels)
+    end
     local i = 0
     for y = 1, H do
-        if all or dirty[y] then
+        local ol = overLines and overLines[y]
+        if all or (dirty and dirty[y]) or ol then
             if dirty then dirty[y] = false end
             for k = i + 1, i + W do
-                local c = fb[k]
+                local c = (ol and over[k]) or fb[k]
                 if c ~= shown[k] then
                     shown[k] = c
-                    local r = RC[c] or colourOf(c, RC, GC, BC)
+                    local r = RC[c] or colorOf(c, RC, GC, BC)
                     set(tex[k], r, GC[c], BC[c])
                 end
             end
@@ -422,7 +463,7 @@ end
 -- Where this game's memory valves (and its resume point) are kept, which is the system's business:
 -- with the settings for a Game Boy game, in a side file of their own for an Advance game.
 local function gameStates(which)
-    return (which or sys or slotSys()).statesFor(saveKey)
+    return (which or sys or slotSys()).statesFor(storeKey or MB.SaveKey(saveKey))
 end
 function GBSYS.statesFor(key)
     local states = MB.Saves().states
@@ -481,8 +522,9 @@ local function start(fresh)
     end
     sys = want
     saveKey = rom.id
+    storeKey = MB.SaveKey(rom.id, rom)
     MB.DB().lastCart = rom.id
-    local ok, res, word = pcall(sys.new, rom)
+    local ok, res, word = pcall(sys.new, rom, storeKey)
     if not (ok and res) then
         broken = true
         Print("The game failed to start: " .. tostring(res))
@@ -505,12 +547,13 @@ local function start(fresh)
         end
     end
     if sys.kind == "native" then
-        for _, g in pairs(grids) do g.holder:Hide() end      -- a native cartridge draws on the screen itself
+        for _, g in pairs(grids) do g.holder:Hide() if g.labelFrame then g.labelFrame:Hide() end end      -- a native cartridge draws on the screen itself
     else
         buildScreen()
     end
     MB.Sound.Attach(machine, saveKey)
     if MB.Link and MB.Link.MachineChanged then MB.Link.MachineChanged(sys.kind ~= "native" and machine or nil) end
+    if MB.Ghosts then MB.Ghosts.MachineChanged(machine, sys.kind) end
     if word then flash(word) end
     return true
 end
@@ -519,7 +562,7 @@ end
 -- its settings file (logout or /reload); this hands them over.
 function MB.SaveGame()
     if not (machine and saveKey) then return end
-    sys.keep(machine, saveKey, true)
+    sys.keep(machine, storeKey or saveKey, true)
     if sys.states and MB.Opt("resume", true) then
         local ok, st = pcall(function() return sys.pack(machine.saveState()) end)
         if ok then gameStates().resume = st end
@@ -530,13 +573,39 @@ end
 local function linkBusy() return MB.Link and MB.Link.Busy and MB.Link.Busy() end
 local function linkBlocks(button) return MB.Link and MB.Link.BlocksKey and MB.Link.BlocksKey(button) end
 
+-- A game can ask the console not to rewind it mid-action (MekkaBoy's own games set a hint while a hand/turn is live, so
+-- memory valves and /mb reset cannot be used to undo an outcome). A 4-byte magic guards the hint, so a game that never
+-- sets it is never treated as busy, and a non-Advance machine that has nothing there reads no magic.
+local function gameBusy()
+    if not (machine and machine.rd32 and machine.rd8) then return false end
+    local ok, busy = pcall(function() return machine.rd32(0x03007E08) == 0x4843424D and machine.rd8(0x03007E0C) ~= 0 end)
+    return (ok and busy) and true or false
+end
+-- The same hint carries a 24-bit fingerprint of the game's progress. A valve is stamped with it when saved, and loads only
+-- while the game's fingerprint still matches, so a valve cannot rewind such a game past a round it has played.
+-- nil for a game that publishes no hint (every outside game): its valves are untouched.
+local function gameRecord()
+    if not (machine and machine.rd32 and machine.rd8) then return nil end
+    local ok, v = pcall(function()
+        if machine.rd32(0x03007E08) ~= 0x4843424D then return nil end
+        return machine.rd8(0x03007E0D) + machine.rd8(0x03007E0E) * 256 + machine.rd8(0x03007E0F) * 65536
+    end)
+    if ok then return v end
+    return nil
+end
+
+-- what a refused valve says, per game (the fingerprint moves on a played hand in Overload, on a trade in Critter Crate)
+local RECORD_WORDS = { OVERLOAD = "That valve is from before a round you played", CRITTERCRATE = "That valve is from before a trade" }
+
 local function saveSlot(n)
     if not slotSys().states then flash(NOT_ADVANCE) return end
     if not machine then flash("Switch it on first") return end
     if linkBusy() then flash("Not while linked") return end
+    if gameBusy() then flash("Not in the middle of a round") return end
     local ok, st = pcall(function() return sys.pack(machine.saveState()) end)
     if not ok then flash("Could not save") MB.DB().lastError = { game = saveKey, error = "valve: " .. tostring(st):sub(1, 400) } return end
     st.when = date and date("%b %d %H:%M") or ""
+    st.record = gameRecord()                       -- (nil for a game without the hint)
     gameStates()[n] = st
     flash(("Saved to valve %d"):format(n))
 end
@@ -544,9 +613,16 @@ end
 local function loadSlot(n)
     if not slotSys().states then flash(NOT_ADVANCE) return end
     if linkBusy() then flash("Not while linked") return end
+    if gameBusy() then flash("Not in the middle of a round") return end
     if not machine and not start() then flash("No cartridge") return end
     local st = gameStates()[n]
     if not st then flash(("Valve %d is empty"):format(n)) return end
+    local live = gameRecord()
+    -- a valve with a record, on a game that has not published one yet (just switched on or reset): wait for it, or the
+    -- check would be skipped. A valve kept before the game had a record counts as 0 (its count started at 0); one from an
+    -- older build of the game is then turned away by the machine itself ("the game has changed").
+    if st.record ~= nil and live == nil then flash("Let the game start, then load the valve") return end
+    if live ~= nil and (st.record or 0) ~= live then flash(RECORD_WORDS[(saveKey or ""):match("^([^@]+)") or ""] or "That valve is from before something that can't be undone") return end
     local ok, good, why = pcall(function() return machine.loadState(sys.unpack(st)) end)
     if ok and good then
         if sys.loaded then sys.loaded(machine) end
@@ -576,6 +652,7 @@ local function crashed(err)
     MB.Sound.Stop()
     MB.Sound.Attach(nil)
     if MB.Link and MB.Link.MachineChanged then MB.Link.MachineChanged(nil) end
+    if MB.Ghosts then MB.Ghosts.MachineChanged(nil) end
     pause()
     Print("The emulator hit an error and stopped: " .. tostring(err))
 end
@@ -588,6 +665,11 @@ local function step(render)
     for i = 1, #pokes do machine.poke(pokes[i].addr, pokes[i].value) end
     local ok, err = pcall(machine.runFrame, render)
     if not ok then crashed(err) return false end
+    local ghosts = MB.Ghosts                     -- (other trainers walking in a Gen 3 game: GBA/Ghosts.lua)
+    if ghosts then
+        local gok, gerr = pcall(ghosts.Frame, machine, render)
+        if not gok then ghosts.Fail(gerr) end
+    end
     if sys.rewind and frameNo % REWIND_EVERY == 0 and MB.Opt("rewind", true) and not linkBusy() then
         lastSnap = machine.saveState(lastSnap)
         history[#history + 1] = lastSnap
@@ -599,6 +681,7 @@ end
 -- ------------------------------------------------------ cartridge slot ---
 -- Take the game out: it is saved first, exactly as when you log out.
 local function eject()
+    if grid and grid.labels then placeLabels(grid, nil) end
     if machine then
         pcall(MB.SaveGame)
         pause()
@@ -607,8 +690,9 @@ local function eject()
         if sys.stop then pcall(sys.stop, machine) end
         machine = nil
         if MB.Link and MB.Link.MachineChanged then MB.Link.MachineChanged(nil) end
+    if MB.Ghosts then MB.Ghosts.MachineChanged(nil) end
     end
-    saveKey, broken = nil, false
+    saveKey, storeKey, broken = nil, nil, false
     history, lastSnap = {}, nil
     pokes = {}
 end
@@ -725,6 +809,15 @@ switchOn = function()
         refreshStatus()
         return
     end
+    -- the first game Together knows: one question (play with the realm?) before it runs; the answer starts it
+    if MB.Ghosts and MB.Ghosts.AskFirst then
+        local ok, asking = pcall(MB.Ghosts.AskFirst, switchOn)
+        if ok and asking then
+            MB.SetScreenMessage("One question before you play")
+            refreshStatus()
+            return
+        end
+    end
     owed = 0
     running = true
     MB.SetPower(true)
@@ -740,6 +833,8 @@ local function setHeld(button, down)
         -- (while linked, the player who leads picks the room: the other's A and B wait)
         if down and linkBlocks(button) then return end
         if machine and sys.pad[button] then machine.setKey(button, down) end
+        -- (talking to a friend's ghost: every way of pressing A, the keyboard and the pad and the on-screen button)
+        if down and button == "a" and MB.Ghosts and MB.Ghosts.Pressed then pcall(MB.Ghosts.Pressed, "a") end
     elseif down then
         if button == "rewind" and not sys.rewind then flash(NOT_ADVANCE) return end
         held[button] = true
@@ -930,6 +1025,10 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
         if last then break end
     end
     MB.Sound.Poll()
+    if not drew and MB.Ghosts then                -- (a friend's ghost walks on a still picture)
+        local gok, busy = pcall(MB.Ghosts.Moving)
+        if not gok then MB.Ghosts.Fail(busy) elseif busy then drew = true end
+    end
     if drew then
         local t1 = clock()
         present()
@@ -948,7 +1047,7 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
     if statTime >= 1 then
         local pct = floor(statFrames / statTime / FPS * 100 + 0.5)
         if sys.second then
-            sys.second(machine, saveKey, { speed = statFrames / statTime / FPS * 100, pictures = secShown / statTime, every = pictureEvery,
+            sys.second(machine, storeKey or saveKey, { speed = statFrames / statTime / FPS * 100, pictures = secShown / statTime, every = pictureEvery,
                                            game = costDrawn, blind = costBlind, paint = costPaint }, flash)
         end
         statFrames, statTime, secShown = 0, 0, 0
@@ -983,6 +1082,9 @@ function MB.ScreenCheck()
     return n
 end
 
+-- what each dot of the screen shows now (for tests: the game's picture with anything drawn over it)
+function MB.ShownDots() return grid and grid.shown end
+
 -- for the speed test and for anyone curious: what a frame is costing right now
 function MB.Perf()
     return { game = costDrawn, blind = costBlind, paint = costPaint, every = pictureEvery, running = running and machine ~= nil }
@@ -999,7 +1101,9 @@ MB.window:HookScript("OnHide", function()
     picking = nil
     if playing() then pause() end
     MB.Sound.Stop()
-    if machine and sys.away then sys.away(machine, saveKey) end
+    if machine and sys.away then sys.away(machine, storeKey or saveKey) end
+    -- closing the window is leaving, not pausing: Together friends stop drawing me at once (they draw me again when I play on)
+    if MB.Ghosts and MB.Ghosts.SayBye then pcall(MB.Ghosts.SayBye) end
 end)
 
 -- The client warns of addon scripts that run long ("Script from ... has exceeded its execution time limit"). Its
@@ -1096,7 +1200,8 @@ MB.AddCommand("carts", "carts - list your cartridges", function()
             local key = c.code or (MB.Carts.Peek and MB.Tested.KeyOf(MB.Carts.Peek(c.id)))
             if key then tried = "  - " .. MB.Tested.Short(key) end
         end
-        print(("  %d: %s%s%s%s"):format(i, c.name, c.system == "gba" and "  [Advance]" or c.system == "native" and "  [native]" or "", tried, c.id == now and "  (in the slot)" or ""))
+        print(("  %d: %s%s%s%s%s"):format(i, c.name, c.system == "gba" and "  [Advance]" or c.system == "native" and "  [native]" or "", tried, c.id == now and "  (in the slot)" or "",
+            c.old and "  - made for an older game client, see /mb oldcarts" or ""))
     end
 end)
 
@@ -1120,8 +1225,9 @@ MB.AddCommand("cart", "cart <number or name> - put a cartridge in (the game in t
 end)
 
 MB.AddCommand("reset", "reset - restart the game from power-on (battery save is kept)", function()
+    if gameBusy() then Print("Not in the middle of a round - finish the hand first.") return end
     if machine then
-        sys.keep(machine, saveKey, true)
+        sys.keep(machine, storeKey or saveKey, true)
         pause()
         machine = nil
         MB.Sound.Stop()
@@ -1139,14 +1245,24 @@ MB.AddCommand("resume", "resume on|off - pick up exactly where you left off afte
     Print("Resume where you left off is " .. (onOff("resume", rest, true) and "on." or "off."))
 end)
 
-MB.AddCommand("color", "color lcd|raw - Game Boy Color screen colours, or plain", function(rest)
-    if rest ~= "lcd" and rest ~= "raw" then rest = (MB.Opt("color", "lcd") == "lcd") and "raw" or "lcd" end
-    MB.DB().opt.color = rest
+-- /mb color <name> picks the console's colorway (UI/Body.lua); /mb color lcd|raw is the Game Boy Color screen.
+-- /mb colour still works for anyone who learned it before 0.20.1, unlisted.
+local function colorCommand(rest)
+    rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local word = rest:lower()
+    if word ~= "lcd" and word ~= "raw" then
+        if MB.ColorwayCommand then MB.ColorwayCommand(rest) end
+        if rest == "" then Print("Game Boy Color screen: " .. (MB.Opt("color", "lcd") == "lcd" and "lcd" or "raw") .. " (/mb color lcd|raw).") end
+        return
+    end
+    MB.DB().opt.color = word
     redrawAll()
-    Print("Colours: " .. (rest == "lcd" and "Game Boy Color screen." or "raw."))
-end)
+    Print("Game Boy Color screen colors: " .. (word == "lcd" and "like the real screen (lcd)." or "plain (raw)."))
+end
+MB.AddCommand("color", "color <name> - the console's color: Gunmetal, Midnight, Arcane, Verdant, Ivory, Rose Gold (color lcd|raw: the Game Boy Color screen)", colorCommand)
+MB.AddCommand("colour", "", colorCommand)
 
-MB.AddCommand("palette", "palette <name>|auto - colours for an original Game Boy game: " .. table.concat(PALETTE_ORDER, ", "), function(rest)
+MB.AddCommand("palette", "palette <name>|auto - colors for an original Game Boy game: " .. table.concat(PALETTE_ORDER, ", "), function(rest)
     rest = rest:lower()
     local db = MB.DB()
     local game = saveKey or inserted()
@@ -1241,7 +1357,8 @@ MB.AddCommand("keys", "keys - show the controls", function()
     print("  Load state 1-4         F1, F2, F3, F4")
     print("  Save state 1-4         Shift + F1, F2, F3, F4")
     print("  Pause, then close      ESCAPE")
-    print("  While the console is open it keeps every key (except Print Screen).")
+    print("  While the console is open it keeps every key (except Print Screen). The ? button on it shows them too.")
+    if MB.window:IsShown() and MB.SetKeyDrawer then MB.SetKeyDrawer(true) end
 end)
 
 MB.AddCommand("bind", "bind <button> <key> | bind reset - change a control, e.g. /mb bind a K", function(rest)
@@ -1249,6 +1366,7 @@ MB.AddCommand("bind", "bind <button> <key> | bind reset - change a control, e.g.
     if rest:lower() == "reset" then
         db.opt.keys = nil
         rebuildKeymap()
+    if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
         Print("Controls back to defaults.")
         return
     end
@@ -1266,6 +1384,7 @@ MB.AddCommand("bind", "bind <button> <key> | bind reset - change a control, e.g.
     end
     db.opt.keys[button] = { key }
     rebuildKeymap()
+    if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
     Print(("%s is now on %s."):format(BUTTON_NAMES[button], key))
 end)
 

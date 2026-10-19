@@ -46,6 +46,19 @@ local GetAddOnInfo = A.GetAddOnInfo or GetAddOnInfo
 local GetAddOnMetadata = A.GetAddOnMetadata or GetAddOnMetadata
 local LoadAddOn = A.LoadAddOn or LoadAddOn
 local EnableAddOn = A.EnableAddOn or EnableAddOn
+local IsVersionCheckOn = A.IsAddonVersionCheckEnabled
+local SetVersionCheck = A.SetAddonVersionCheck
+
+-- A cartridge folder carries the client version it was made for. After a client update, the ones made
+-- before it are "out of date" and the client will not load them unless "Load out of date AddOns" is ticked.
+-- (Game Boy codes live in the Slot folders and our own games ship with MekkaBoy, so both move with it.)
+local OLD = "INTERFACE_VERSION"
+local function whyNot(addon)
+    if not (addon and GetAddOnInfo) then return nil end
+    local ok, _, _, _, loadable, reason = pcall(GetAddOnInfo, addon)
+    if ok and not loadable then return reason end
+    return nil
+end
 
 local function complete(rom)
     if not rom then return false end
@@ -68,9 +81,11 @@ function Carts.List()
                 local _, name = pcall(GetAddOnMetadata, i, "X-MekkaBoy-Name")
                 local _, system = pcall(GetAddOnMetadata, i, "X-MekkaBoy-System")
                 local _, code = pcall(GetAddOnMetadata, i, "X-MekkaBoy-Code")    -- (which game it is, for the list of tried games)
-                list[#list + 1] = { id = id, addon = (GetAddOnInfo(i)), system = (system == "gba" or system == "native") and system or nil,
+                local addon = (GetAddOnInfo(i))
+                list[#list + 1] = { id = id, addon = addon, system = (system == "gba" or system == "native") and system or nil,
                                     name = (type(name) == "string" and name ~= "") and name or id,
-                                    code = (type(code) == "string" and code ~= "") and code or nil }
+                                    code = (type(code) == "string" and code ~= "") and code or nil,
+                                    old = whyNot(addon) == OLD or nil }
             end
         end
     end
@@ -129,6 +144,8 @@ function Carts.Load(id)
         end
         if ok then
             opened[c.addon] = true
+        elseif not roms[id] and reason == OLD then
+            return nil, ("%s was made for an older version of the game client, so the client will not load it. Type /mb oldcarts for the two ways to fix it."):format(c.name)
         elseif not roms[id] then
             return nil, ("The cartridge would not load (%s). Check that %s is enabled in the AddOns list."):format(tostring(reason), c.addon)
         end
@@ -146,6 +163,51 @@ end
 
 -- Saved settings (which list the pasted games) arrive after this file has run.
 MB.onLogin[#MB.onLogin + 1] = function() shelf = nil end
+
+-- cartridges this client will not load because they were made for an older one
+function Carts.Old()
+    local t = {}
+    for _, c in ipairs(Carts.List()) do if c.old then t[#t + 1] = c end end
+    return t
+end
+local function names(list)
+    local t = {}
+    for i = 1, math.min(3, #list) do t[i] = list[i].name end
+    local s = table.concat(t, ", ")
+    if #list > 3 then s = s .. (" and %d more"):format(#list - 3) end
+    return s
+end
+-- say so once at login, and again only when the client or the list changes
+MB.onLogin[#MB.onLogin + 1] = function()
+    local old = Carts.Old()
+    if #old == 0 or not MekkaBoyDB then return end
+    local build = GetBuildInfo and select(2, GetBuildInfo()) or "?"
+    local key = tostring(build) .. ":" .. names(old)
+    if MekkaBoyDB.oldCartsNoted == key then return end
+    MekkaBoyDB.oldCartsNoted = key
+    MB.Print(("%d cartridge%s made for an older game client will not load: %s. Type /mb oldcarts to fix it."):format(#old, #old == 1 and "" or "s", names(old)))
+end
+
+MB.AddCommand("oldcarts", "oldcarts - cartridges made for an older game client, and how to get them loading again", function(rest)
+    local old = Carts.Old()
+    if #old == 0 then
+        MB.Print("Every cartridge loads with this game client.")
+        return
+    end
+    if (rest or ""):lower() == "on" and SetVersionCheck then
+        SetVersionCheck(false)
+        shelf = nil
+        MB.Print("Load out of date AddOns is now on (for every addon, the same box as in the AddOns list). Type /reload to load the old cartridges. Untick the box in the AddOns list to switch it back.")
+        return
+    end
+    MB.Print(("Made for an older game client: %s. Two ways to fix it:"):format(names(old)))
+    if SetVersionCheck and not (IsVersionCheckOn and not IsVersionCheckOn()) then
+        print("  1. Type /mb oldcarts on, then /reload. This ticks Load out of date AddOns, which lets every older addon load, not only these.")
+    else
+        print("  1. Tick Load out of date AddOns in the AddOns list (character screen), then come back in. It lets every older addon load, not only these.")
+    end
+    print(("  2. Make the cartridge again: drop your game file on %s and replace the old folder with the new one."):format(MB.WORKSHOP_URL or "the Workshop"))
+end)
 
 -- a game that arrived some other way than a cartridge folder (see GB/Import.lua)
 function Carts.Adopt(id, name, numBanks, cgb, banks)

@@ -9,7 +9,7 @@
 --   * CPU registers and flags are upvalues shared by 512 small opcode
 --     functions; each returns the T-cycles it took.
 --   * 8-bit AND/OR/XOR are table lookups (AND8[a * 256 + b]).
---   * Tiles are decoded to one colour index per pixel when VRAM is written,
+--   * Tiles are decoded to one color index per pixel when VRAM is written,
 --     so drawing a line is plain table reads.
 --   * The PPU is line based: a whole line is drawn at the end of mode 3.
 --   * The timer is computed from the cycle clock when read or due, not ticked.
@@ -666,9 +666,9 @@ function GB.new(cfg)
   -- Most frames of most games change little: a menu, a line of text, a
   -- standing figure. So each screen line remembers what it was drawn from,
   -- and is only drawn again when one of those things has changed since.
-  -- `gen` ticks whenever picture memory, sprites or colours really change;
+  -- `gen` ticks whenever picture memory, sprites or colors really change;
   -- the stamps say when each kind of thing last did.
-  local gen, stampAll, stampOam = 1, 1, 1       -- stampAll: tile pictures, colours, or anything sweeping
+  local gen, stampAll, stampOam = 1, 1, 1       -- stampAll: tile pictures, colors, or anything sweeping
   local stampMap = zeros(64, 1)                 -- one per row of each of the two tile maps
   local lineStamp, lineKey1, lineKey2, lineN = zeros(144, 0), zeros(144, -1), zeros(144, -1), zeros(144, 0)
   local lineDirty = {}                          -- for whoever shows the picture: lines drawn since they last looked
@@ -854,15 +854,15 @@ function GB.new(cfg)
   end
 
   -- ------------------------------------------------------- rendering ---
-  local bgi = zeros(160)       -- per pixel: BG colour index (+4 when the tile has priority)
-  local sbuf = zeros(160)      -- per pixel: sprite colour + 1 (+1000 when behind the BG)
+  local bgi = zeros(160)       -- per pixel: BG color index (+4 when the tile has priority)
+  local sbuf = zeros(160)      -- per pixel: sprite color + 1 (+1000 when behind the BG)
   local sel = {}
 
   -- one row of BG or window tiles, from screen x = px.
   -- This is the hottest loop in the whole emulator after the processor: most
   -- of a frame's time goes on these 23,040 dots. So: tables are fetched into
   -- locals once, a tile that is wholly on screen is written with eight plain
-  -- assignments, and the per-dot note of "which BG colour is here" (only
+  -- assignments, and the per-dot note of "which BG color is here" (only
   -- sprites need it) is kept only on lines that have sprites.
   local function drawTiles(mapRow, col, px, ty, o, noteBG)
     local fb, bgcol, bgi, vram0, vram1, tc0, tc1 = fb, bgcol, bgi, vram0, vram1, tc0, tc1
@@ -1120,8 +1120,8 @@ function GB.new(cfg)
   end
   dmgPal()
 
-  -- Colours for original (monochrome) Game Boy games: three tables of four
-  -- 15-bit colours, lightest first, indexed 0..3.
+  -- Colors for original (monochrome) Game Boy games: three tables of four
+  -- 15-bit colors, lightest first, indexed 0..3.
   function m.setDmgPalette(bg, o0, o1)
     shadeBG, shadeO0, shadeO1 = bg or DMG_SHADE, o0 or bg or DMG_SHADE, o1 or o0 or bg or DMG_SHADE
     dmgPal()
@@ -2252,6 +2252,9 @@ function GB.new(cfg)
   function m.peekRom(n, addr) return bank(n)[addr % 0x4000] end
   -- work memory 0xD000-0xDFFF in a given bank (1-7), whichever bank the game has switched in
   function m.peekBank(bank, addr) return wram[bank][addr - 0xD000] end
+  -- (for Together, GBA/Ghosts.lua: video memory in either bank, and a sprite color as shown: palette * 4 + index)
+  function m.peekVram(bank, addr) return (bank == 1 and vram1 or vram0)[addr - 0x8000] end
+  function m.objColor(k) return objcol[k] end
   function m.poke(addr, v) wr(addr, v) end
 
   function m.debug()

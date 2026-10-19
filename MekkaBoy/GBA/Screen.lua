@@ -1,7 +1,7 @@
 -- Game Boy Advance games on the console. The console itself (GB/Console.lua)
 -- is the same for every kind of cartridge; this file is the part that is
 -- particular to the Advance: how its machine is started, where its save and
--- its memory valves go, how its colours are read. EXPERIMENTAL: no rewind yet.
+-- its memory valves go, how its colors are read. EXPERIMENTAL: no rewind yet.
 --
 -- The game's own saving works: the save is kept with the addon's settings,
 -- which WoW writes to disk at logout or /reload. Memory valves (and the
@@ -29,8 +29,8 @@ local Sys = {
 }
 MB.AdvanceSystem = Sys
 
--- colours arrive as 15 bits, sometimes with a layer number above them (see the screen painter)
-function Sys.colour(c, RC, GC, BC)
+-- colors arrive as 15 bits, sometimes with a layer number above them (see the screen painter)
+function Sys.color(c, RC, GC, BC)
     local v = c % 32768
     local r5 = v % 32
     local g5 = floor(v / 32) % 32
@@ -66,11 +66,14 @@ end
 function Sys.statesFor(key)
     if openStates() then
         MekkaBoyStates = MekkaBoyStates or {}
-        local name = (MB.DB().testSaves and "practice " or "") .. key      -- (practice saves keep valves of their own)
+        local prefix = MB.DB().testSaves and "practice " or ""             -- (practice saves keep valves of their own)
+        local name = prefix .. key
+        if MB.ClaimStates then MB.ClaimStates(MekkaBoyStates, prefix, key, prefix) end   -- (valves of a save this character claimed)
         MekkaBoyStates[name] = MekkaBoyStates[name] or {}
         return MekkaBoyStates[name]
     end
-    local states = MB.Saves().states
+    local states = MB.Saves().states                                   -- (practice saves have a store of their own here)
+    if MB.ClaimStates then MB.ClaimStates(states, "", key, MB.DB().testSaves and "practice " or "") end
     states[key] = states[key] or {}
     return states[key]
 end
@@ -84,16 +87,21 @@ end
 local startedAt, loadMs, firstFrameMs = 0, 0, 0
 local slowest
 
-function Sys.new(rom)
+-- key: where its save lives (MB.SaveKey: one of our own games keeps one per character)
+function Sys.new(rom, key)
     local t0 = clock()
+    key = key or rom.id
     local saves = MB.Saves()
-    if MB.DB().testSaves and saves.gba[rom.id] == nil and MB.TestSaves then
+    if MB.ClaimSave then MB.ClaimSave(saves, rom.id, key) end           -- (an account-wide save of ours goes to this character, once)
+    if MB.DB().testSaves and saves.gba[key] == nil and MB.TestSaves then
         -- practice saves are on and this game has not been played with them yet: put the ready-made one in
-        saves.gba[rom.id] = MB.TestSaves.For("gba", rom.banks[1]:sub(0xAD, 0xB0)) or false
+        saves.gba[key] = MB.TestSaves.For("gba", rom.banks[1]:sub(0xAD, 0xB0)) or false
     end
-    local kept = saves.gba[rom.id] or nil
+    local kept = saves.gba[key] or nil
+    -- our own games tell the time by the realm's clock, from the server; a game of yours by the computer's
+    local ours = MB.IsOurs and MB.IsOurs(rom)
     local m = MB.GBA.new({ bank = function(n) return rom.banks[n + 1] end, size = rom.size or rom.numBanks * 16384, save = kept, chip = rom.chip,
-                           clock = function() return date("*t") end })
+                           clock = ours and MB.RealmClock or function() return date("*t") end })
     pcall(m.runFrame, true)
     firstFrameMs = clock() - t0
     if MB.Tested and MB.Tested.Notice then pcall(MB.Tested.Notice, rom) end      -- (what to expect of this game, said once)
@@ -152,6 +160,15 @@ function Adv.Machine() return onConsole() end
 function Adv.IsOpen() return onConsole() ~= nil and MB.IsRunning() end
 function Adv.Close() MB.Hide() end
 function Adv.Forget() if onConsole() then MB.EjectGame() end end
+-- /mb testsave fresh (and a switch to the other player): the practice games' resume points and memory valves go too,
+-- or a game would carry on from where it was instead of from the practice save
+function Adv.ForgetPractice()
+    if openStates() and MekkaBoyStates then
+        for k in pairs(MekkaBoyStates) do
+            if type(k) == "string" and k:sub(1, 9) == "practice " then MekkaBoyStates[k] = nil end
+        end
+    end
+end
 function Adv.Open(id)
     if not MB.GBA then Print("The Game Boy Advance part is not loaded: restart the game client.") return end
     local list = MB.Carts.ListAdvance()

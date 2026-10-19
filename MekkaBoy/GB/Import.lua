@@ -4,7 +4,7 @@
 -- then kept with your saved settings, in one of a few small "slot" addons
 -- (MekkaBoy_Slot1..) that are only read when that game is put in the console.
 --
--- A code is:  MEKKA1:<id>:<name>:<banks>:<colour>:<size>:<sum>:<sum>:<data>:END
+-- A code is:  MEKKA1:<id>:<name>:<banks>:<color>:<size>:<sum>:<sum>:<data>:END
 -- where <data> is the ROM, zlib-compressed and base64-encoded.
 local _, MB = ...
 

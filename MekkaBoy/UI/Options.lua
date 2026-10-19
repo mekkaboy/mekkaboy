@@ -137,6 +137,10 @@ local function build()
         function() return MB.Opt("scale", nil) or 0 end,
         function(v) db().opt.scale = (v >= 1) and v or nil MB.ApplyScale() end,
         function(v) return v >= 1 and ("%d"):format(v) or "Automatic" end), 20, 28)
+    place(slider(panel, "Color", 1, #MB.Colorways, 1, "The console's color. Also: /mb color <name>.",
+        function() for i, c in ipairs(MB.Colorways) do if c == MB.Colorway() then return i end end return 1 end,
+        function(v) MB.SetColorway(MB.Colorways[v] or "gunmetal") end,
+        function(v) return MB.ColorwayNames[MB.Colorways[v] or "gunmetal"] end), 20, 28)
 
     heading("Sound")
     place(check(panel, "Play the game's music and sounds", "A game needs a soundtrack pack made from your own copy; a pasted game is silent. See the README.",

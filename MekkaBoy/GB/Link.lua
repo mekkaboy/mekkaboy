@@ -34,8 +34,11 @@ local diag = { events = 0, ours = 0, returns = {} }     -- what the line has sho
 Link.diag = diag
 
 local function laneName(lane) return (lane and lane > 1) and (PREFIX .. lane) or PREFIX end
+local EXTRA_LANE = 5        -- an addon name of its own for ghosts and the lobby (lanes 1-4 are the link's wire)
+local whispered, unreachable = {}, {}       -- spelling (lower case) -> when we last whispered it / when the server said nobody
 local function send(text, channel, target, lane)
     if not SendAddonMessage then return "no messaging" end
+    if channel == "WHISPER" and type(target) == "string" then whispered[target:lower()] = GetTime() end
     local ok, r = pcall(SendAddonMessage, laneName(lane), text, channel, target)
     local seen = tostring(ok and r or ("error: " .. tostring(r)))
     diag.returns[channel .. ":" .. seen] = (diag.returns[channel .. ":" .. seen] or 0) + 1
@@ -80,7 +83,13 @@ local function spellings(list, name)
     if type(name) ~= "string" or name == "" then return end
     local seen = {}
     for _, v in ipairs(list) do seen[v:lower()] = true end
-    for _, v in ipairs({ name, (name:gsub("%s+", "-")), (name:gsub("%s+", "")), (name:gsub("%-", " ")) }) do
+    -- (a trailing -Realm stays a realm: only the name's own hyphen may become a space)
+    local realm = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName())
+    local body, tail = name, ""
+    if type(realm) == "string" and realm ~= "" and #name > #realm + 1 and name:sub(-#realm - 1):lower() == ("-" .. realm):lower() then
+        body, tail = name:sub(1, -#realm - 2), name:sub(-#realm - 1)
+    end
+    for _, v in ipairs({ name, (body:gsub("%s+", "-")) .. tail, (body:gsub("%s+", "")) .. tail, (body:gsub("%-", " ")) .. tail }) do
         if not seen[v:lower()] then
             seen[v:lower()] = true
             list[#list + 1] = v
@@ -109,15 +118,40 @@ local function nameFacts()
     return f
 end
 
+local nameIs          -- (below: the same player, with or without the realm in the name)
 local function onMessage(text, channel, sender, lane)
     local kind, id, rest = text:sub(1, 1), text:sub(2, 4), text:sub(5)
     if kind == "V" then                           -- "this is my version" (Hello.lua)
         if MB.Hello and MB.Hello.Heard then MB.Hello.Heard(rest, channel, sender) end
         return
     end
+    if kind == "Q" then                           -- the realm lobby (GB/Lobby.lua)
+        if MB.Lobby and MB.Lobby.Heard then MB.Lobby.Heard(text, channel, sender) end
+        return
+    end
     if kind == "L" or kind == "W" then            -- the link itself (further down)
         if Link.Heard then Link.Heard(text, channel, sender) end
         return
+    end
+    if kind == "G" then                           -- other trainers walking in your game (GBA/Ghosts.lua)
+        if MB.Ghosts and MB.Ghosts.Heard then MB.Ghosts.Heard(text, channel, sender) end
+        return
+    end
+    -- which spelling of a name reaches that player (Link.Resolve): their MekkaBoy answers our ping
+    if kind == "A" and channel == "WHISPER" and Link.resolving then
+        local r = Link.resolving[tonumber(id) or -1]
+        if r then
+            if nameIs(sender, r.name) then
+                Link.resolving[tonumber(id)] = nil
+                if not r.call.done and GetTime() - r.call.at < 15 then
+                    r.call.done = true
+                    pcall(r.call.cb, r.name, sender)
+                end
+            elseif GetTime() - r.call.at > 15 then
+                Link.resolving[tonumber(id)] = nil
+            end
+            return
+        end
     end
     -- Testing alone: on a shared route (a chat channel, party, guild) we hear
     -- our own messages come back from the server, and time those instead.
@@ -152,7 +186,12 @@ local function onMessage(text, channel, sender, lane)
         answered = answered + 1
         if answered > 200 then return end
         local back = (channel == "WHISPER") and "WHISPER" or channel
-        if kind == "P" then
+        if kind == "P" and back == "WHISPER" and (tonumber(id) or 0) >= 800 and (tonumber(id) or 0) < 900 then
+            -- someone finding which spelling of our name reaches us (Link.Resolve): answer every spelling of theirs
+            local list = { sender }                     -- (the name the server gave first; it is the surest)
+            spellings(list, sender)
+            for i, name in ipairs(list) do if i <= 4 and not Link.Unreachable(name) then send("A" .. id, "WHISPER", name, lane) end end
+        elseif kind == "P" then
             send("A" .. id, back, sender, lane)
         else
             -- say exactly which bytes arrived: count, and a simple sum
@@ -175,6 +214,44 @@ local function onMessage(text, channel, sender, lane)
 end
 
 Link.Plain, Link.IsMe = plain, isMe
+-- the same player? (one name may carry the realm, "Name-Realm", and the other not)
+local function realmPlain()
+    local r = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName())
+    return type(r) == "string" and r ~= "" and plain(r) or nil
+end
+function nameIs(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" then return false end
+    local pa, pb = plain(a), plain(b)
+    if pa == pb then return true end
+    local r = realmPlain()
+    return r ~= nil and (pa == pb .. r or pb == pa .. r)
+end
+Link.NameIs = nameIs
+-- did the server just say nobody of that name is online? (then that spelling is not tried again for a minute)
+function Link.Unreachable(name)
+    local t = type(name) == "string" and unreachable[name:lower()]
+    return t and GetTime() - t < 60 or false
+end
+
+-- Find which spelling of a player's name a whisper reaches: one ping to each (numbers 800-899), and their
+-- MekkaBoy answers by itself (this version and later: the pings go out on the extra addon name, which older versions
+-- do not listen on). cb(spelling, theirSenderName) once, on the first answer.
+local resolveNext = 800
+function Link.Resolve(name, cb, unit)
+    local cands = {}
+    if unit then cands = unitSpellings(unit) else spellings(cands, name) end
+    Link.resolving = Link.resolving or {}
+    local call = { cb = cb, at = GetTime() }
+    for i, c in ipairs(cands) do
+        if i > 4 then break end
+        local id = resolveNext
+        resolveNext = resolveNext >= 899 and 800 or resolveNext + 1
+        Link.resolving[id] = { name = c, call = call }
+        send(("P%03d"):format(id), "WHISPER", c, EXTRA_LANE)
+    end
+    return cands
+end
+Link.Spellings = function(name) local t = {} spellings(t, name) return t end
 
 -- ---------------------------------------------------------------- test ---
 local function mark(kind, n, payload, channel, target, lane)
@@ -443,6 +520,7 @@ end
 
 local OURS = {}             -- addon name -> lane number
 for lane = 1, LANES do OURS[laneName(lane)] = lane end
+OURS[laneName(EXTRA_LANE)] = EXTRA_LANE
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("CHAT_MSG_ADDON")
 ev:RegisterEvent("CHAT_MSG_ADDON_LOGGED")
@@ -461,6 +539,7 @@ if RegisterPrefix then
     local ok, r = pcall(RegisterPrefix, PREFIX)
     diag.registered = tostring(ok and r or ("error: " .. tostring(r)))
     for lane = 2, LANES do pcall(RegisterPrefix, laneName(lane)) end
+    pcall(RegisterPrefix, laneName(EXTRA_LANE))
 end
 if C.IsAddonMessagePrefixRegistered then
     diag.isRegistered = function() return C.IsAddonMessagePrefixRegistered(PREFIX) end
@@ -479,7 +558,24 @@ end
 --                      (each names its own game's family; the two need not be the same)
 --   LX <id>            "I am ending the link"
 --   W <frame>          a frame of the wire
+-- Without a party (/mb link <name>), the same link runs over whispers to that one player. A name can be spelled
+-- several ways (Forever's two-part names), and only some reach the player, so the first messages find the spelling:
+--   LV <id> <k> <protocol> <family>        "I want to link" (whispered to spelling k of their name)
+--   LB <id> <k> <j> <protocol> <family>    "yes" (whispered to spelling j of the caller's name; k: the spelling that reached me)
+--   LC <id> <j>                            "linked" (j: the spelling of your name that reached me)
+--   then W frames and LX, as in a party, whispered to the spelling that works
+-- A table for more than two (only MekkaBoy's own games, when the cartridge asks for one: GBA/Cable.lua Seats).
+-- The host links with each guest on a wire of its own; guests talk only to the host.
+--   LT <id> <seats> <code> <family>   "my table has room" (the host, every few seconds while a seat is free;
+--                                     code: the 4-letter game code, which the guest's game must share)
+--   LA <id> <family>                  "may I sit down?" (the guest, every few seconds until seated)
+--   LS <id> <seat> <name>             "<name>: seat <seat> is yours" (255 = the table is full; never 0: chat takes no zero bytes)
+--   LX <id>                           a guest leaving frees its seat; the host leaving closes the table
 local INVITE_EVERY, INVITE_FOR = 3, 90
+local TABLE_INVITE_EVERY, ASK_EVERY, ASK_FOR = 4, 3, 30
+-- the wire marks for seat k's pair of wires at table id (seat 1 gets the two-player pair: id and id + 125);
+-- always 1..120 and 126..245, so never "|" (124) nor zero
+local function wireIds(id, k) local h = ((id - 1 + 40 * (k - 1)) % 120) + 1 return h, h + 125 end
 local GAMES_TEXT = "Pokemon Red, Blue, Yellow, Gold, Silver, Crystal, Ruby, Sapphire, Emerald, FireRed and LeafGreen, and MekkaBoy's own games"
 local function fits(a, b) return MB.Cable.Compatible(a, b) end
 -- where a game's link desk is
@@ -494,9 +590,33 @@ local heard          -- an invitation waiting for an answer: { id, sender, famil
 local machine        -- the game in the console, when one is running
 local ticker = CreateFrame("Frame")
 ticker:Hide()
+-- While linked, each MekkaBoy says "my game is running" every second (a bare "K" on the wire), and only while it is:
+-- a partner whose game has stopped (paused, closed, a loading screen, gone) falls silent. The Advance game here is then
+-- held still, so it cannot finish a trade, and save it, on its own; after AWAY_CLOSE the link is closed.
+-- (a beat goes only when nothing else has for BEAT_EVERY: anything we send says the same, and a trade or battle in
+-- full flow needs every frame the server allows; a frame lost on the way is sent again after 3 s, hence the margins)
+local BEAT_EVERY, AWAY_HOLD, AWAY_TELL, AWAY_CLOSE = 2.5, 4, 9, 60
+-- at a table (the host's star) a seat whose console has fallen silent this long is freed: the game decides what
+-- happens to it (Deadmines Hold'em empties it, and a crew member sits down a little later). The beats there go
+-- whether or not the game is running: a paused guest is the game's to deal with (it sits out), a gone one is ours.
+local TABLE_AWAY = 15
 
 local function clockNow() return GetTime() end
-local function raw(text, lane)
+-- one wire's beat: "K" when nothing else has gone for BEAT_EVERY; returns how long the other end has been silent
+-- (nil until it has been heard to beat at all: an older MekkaBoy never does, and is never timed out this way)
+local function beat(o, wire, t, running)
+    if running and t - math.max(o.beatAt or 0, wire.pushedAt or 0) >= BEAT_EVERY then
+        o.beatAt = t
+        wire:push("K", true)
+    end
+    if o.tickAt and t - o.tickAt > 3 then o.heardAt = t end          -- (our own loading screen)
+    o.tickAt = t
+    if o.beats then return t - (o.heardAt or t) end
+end
+local function heardFrom(o, msg) o.heardAt = clockNow() if msg == "K" then o.beats = true return true end end
+local function raw(text, lane, route)
+    if route == nil then route = session and session.route end
+    if route then return send(text, "WHISPER", route.target, lane) == nil end
     return send(text, "PARTY", nil, lane) == nil
 end
 -- the stand-ins for this machine: the Game Boy kind or the Advance kind
@@ -510,6 +630,55 @@ local function family()
     return cable and cable.Family(machine) or nil
 end
 local function short(name) return (tostring(name):gsub("%-[^%-]*$", "")) end
+Link.Short = short
+-- the seats the running game's table wants (0: an ordinary two-player link)
+local function tableSeats()
+    local m = machine
+    if m and m.linkPlug and MB.AdvanceCable and MB.AdvanceCable.Seats then return MB.AdvanceCable.Seats(m) end
+    return 0
+end
+local function gameCode()
+    local m = machine
+    if m and m.linkPlug and MB.AdvanceCable and MB.AdvanceCable.Code then return MB.AdvanceCable.Code(m) end
+    return ""
+end
+-- exactly this player (a seat is given by name, so a prefix match is not enough)
+local function sameAsMe(name)
+    if not (UnitName and type(name) == "string") then return false end
+    local me, realm = UnitName("player")
+    if type(me) ~= "string" or me == "" then return false end
+    local n = plain(name)
+    if n == plain(me) then return true end
+    realm = (type(realm) == "string" and realm ~= "" and realm) or (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName())
+    return type(realm) == "string" and n == plain(me .. realm)
+end
+-- the whisper paths: this player in any spelling (a two-part name, with or without the realm), and my full name
+local function myFull()
+    local me, second = UnitName and UnitName("player")
+    if type(me) ~= "string" then return "" end
+    return plain(me .. ((type(second) == "string") and second or ""))
+end
+local function isMyself(name)
+    if sameAsMe(name) then return true end
+    local me, second = UnitName and UnitName("player")
+    if type(me) ~= "string" or me == "" then return false end
+    return nameIs(name, me) or (type(second) == "string" and second ~= "" and nameIs(name, me .. second)) or false
+end
+local function fullOf(name)                       -- a sender's name without the realm, for the tie-break
+    local n, r = plain(name), realmPlain and realmPlain()
+    if r and #n > #r and n:sub(-#r) == r then n = n:sub(1, -#r - 1) end
+    return n
+end
+local function memberMask(s)
+    if not s.host then return 1 + 2 ^ (s.seat or 1) end
+    local mask = 1
+    for k in pairs(s.members) do mask = mask + 2 ^ k end
+    return mask
+end
+local function memberBy(s, sender)
+    for k, mb in pairs(s.members) do if plain(mb.name) == plain(sender) then return k, mb end end
+end
+local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
 
 local NOTES = {
     lead = function(s)
@@ -572,12 +741,60 @@ local function record(s, what)
     end
     local e = s.log.events
     if #e < 200 then e[#e + 1] = ("%.1f %s"):format(clockNow() - s.since, what) end
-    if s.wire then s.log.frames, s.log.resent, s.log.refused = s.wire.frames, s.wire.resent, s.wire.refused end
+    if s.wire then
+        s.log.frames, s.log.resent, s.log.refused = s.wire.frames, s.wire.resent, s.wire.refused
+        local w = s.wire
+        s.log.rttMs = w.rtt and math.floor(w.rtt * 1000 + 0.5) or nil              -- (answer times: average, and best)
+        s.log.rttBestMs = w.rttLow and math.floor(w.rttLow * 1000 + 0.5) or nil
+        s.log.waitedS = w.starved and math.floor(w.starved * 10 + 0.5) / 10 or nil   -- (seconds held back by the server's limit)
+    end
+    -- the game's speed while linked (100 = full speed): a slow console makes a slow link, whatever the line does
+    local m = MB.Machine and MB.Machine()
+    local f = m and (m.frameNo or (m.clock and math.floor(m.clock() / 70224)))
+    if f then
+        local t = clockNow()
+        if not s.speedAt then s.speedAt, s.speedFrames = t, f
+        elseif t - s.speedAt > 5 then
+            local pct = math.floor((f - s.speedFrames) / ((t - s.speedAt) * 59.73) * 100 + 0.5)
+            s.log.speed = pct
+            s.log.slowest = math.min(s.log.slowest or pct, pct)
+            s.speedAt, s.speedFrames = t, f
+        end
+    end
+    if s.table then s.log.seats, s.log.seat = s.seats, s.seat end
 end
 
 local function plug()
     local s = session
     if not (s and s.state == "linked") then return end
+    if s.table then
+        if s.ghost then pcall(s.ghost.detach, s.ghost) s.ghost = nil end
+        if not machine then return end
+        if family() ~= s.family or gameCode() ~= s.code then
+            Print("This game cannot sit at that table: it is for another of MekkaBoy's games.")
+            return
+        end
+        local send
+        if s.host then
+            send = function(msg, to)
+                if session ~= s then return end
+                if to then
+                    local mb = s.members[to]
+                    if mb then mb.wire:push(msg) end
+                else
+                    for _, mb in pairs(s.members) do mb.wire:push(msg) end
+                end
+            end
+        else
+            send = function(msg) if session == s and s.wire then s.wire:push(msg) end end
+        end
+        s.ghost = MB.AdvanceCable.Attach(machine, {
+            host = s.host, seats = s.seats, seat = s.seat, members = memberMask(s), send = send,
+            note = function(what) record(s, what) end,
+        })
+        record(s, s.ghost and "plugged in" or "no stand-in for this game")
+        return
+    end
     if s.ghost then
         s.epoch, s.round = s.ghost.epoch, s.ghost.round
         pcall(s.ghost.detach, s.ghost)
@@ -591,6 +808,7 @@ local function plug()
     s.ghost = cableFor(machine).Attach(machine, {
         host = s.host, epoch = s.epoch, round = s.round, peer = s.peer,
         send = function(msg) if session == s then s.wire:push(msg) end end,
+        hurry = MB.Alpha() and function() if session == s then s.wire:hurry() end end or nil,
         note = function(what)
             record(s, what)
             local line = NOTES[what]
@@ -601,6 +819,21 @@ local function plug()
     record(s, s.ghost and "plugged in" or "no stand-in for this game")
 end
 
+-- "the link is over" must reach the other end: when the server pushes back (the allowance is spent, as it can be when
+-- all the addon's names are counted together), try again for a few seconds rather than leave them linked to nobody
+local byeFrame
+local function sayBye(text, route)
+    if raw(text, nil, route) then return end
+    byeFrame = byeFrame or CreateFrame("Frame")
+    local untilT, nextT = GetTime() + 5, GetTime() + 0.3
+    byeFrame:SetScript("OnUpdate", function(f)
+        local t = GetTime()
+        if t < nextT then return end
+        nextT = t + 0.3
+        if raw(text, nil, route) or t > untilT then f:SetScript("OnUpdate", nil) end
+    end)
+    byeFrame:Show()
+end
 local function unlink(why, tell)
     local s = session
     if not s then return end
@@ -608,21 +841,27 @@ local function unlink(why, tell)
     ticker:Hide()
     if s.ghost then pcall(s.ghost.detach, s.ghost) end
     if s.state == "linked" then record(s, "ended: " .. tostring(why)) end
-    if tell then raw("LX" .. string.char(s.id)) end
+    if tell then sayBye("LX" .. string.char(s.id), s.route or false) end
     if why then Print(why) end
 end
 
-local function linked(partner, id, host, fam, peer)
-    session = { id = id, host = host, state = "linked", partner = partner, family = fam, peer = peer or fam, epoch = 0, since = clockNow() }
+local function linked(partner, id, host, fam, peer, route)
+    session = { id = id, host = host, state = "linked", partner = partner, family = fam, peer = peer or fam, epoch = 0, since = clockNow(), route = route }
     local s = session
     s.wire = MB.Wire.New({
         id = host and id or (id + 125), peer = host and (id + 125) or id, room = 254, now = clockNow, lanes = LANES,
-        send = function(frame, lane) return raw("W" .. frame, lane) end,
-        deliver = function(msg) if s.ghost then s.ghost:receive(msg) end end,
+        send = function(frame, lane) return raw("W" .. frame, lane, s.route or false) end,
+        deliver = function(msg)
+            s.heardAt = clockNow()
+            if msg == "K" then s.beats = true return end        -- (their game is running: nothing else to it)
+            if s.ghost then s.ghost:receive(msg) end
+        end,
         lost = function() if session == s then unlink(("The link with %s went quiet and was closed. /mb link starts again."):format(short(partner))) end end,
     })
+    s.heardAt, s.beatAt = clockNow(), 0
     ticker:Show()
     local mixed = (session.peer ~= fam)
+    if route then record(s, "over whispers to " .. tostring(route.target)) end
     if fam == "native" then
         Print(("Linked with %s. Your games can see each other now%s."):format(short(partner), host and " (you lead)" or ""))
     elseif fam == "gen3" then
@@ -642,14 +881,128 @@ local function linked(partner, id, host, fam, peer)
         Print(("Linked with %s%s. They lead: stand in a Pokemon Center until told their link is open."):format(short(partner),
             mixed and (fam == "gen2" and ", who is playing an older game (use your Time Capsule)" or ", who is playing a newer game (you will meet through its Time Capsule)") or ""))
     end
+    if fam ~= "native" and MB.Alpha() then
+        -- (the trade animation and a battle's moves are the games' own, and long: fast-forward is safe while linked)
+        Print(("If a trade or battle feels slow, hold %s to fast-forward. The two games stay in step; the other player can do the same."):format(MB.KeyLabel and MB.KeyLabel("ff") or "Tab"))
+    end
+    plug()
+end
+
+-- ---- a table for more than two ----
+local function dropMember(s, k, why)
+    local mb = s.members[k]
+    if not mb then return end
+    s.members[k] = nil
+    record(s, ("seat %d left: %s"):format(k, why))
+    if s.ghost and s.ghost.setMembers then s.ghost:setMembers(memberMask(s)) end
+    Print(why == "left" and ("%s left your table."):format(short(mb.name))
+        or ("%s's link went quiet; their seat is free again."):format(short(mb.name)))
+end
+local function seatMember(s, sender, fam)
+    local k = memberBy(s, sender)
+    if k then raw("LS" .. string.char(s.id, k) .. sender) return end     -- (asked again: the answer was lost)
+    if not fits(fam, s.family) then return end
+    for seat = 1, s.seats - 1 do if not s.members[seat] then k = seat break end end
+    if not k then raw("LS" .. string.char(s.id, 255) .. sender) return end
+    local mine, peer = wireIds(s.id, k)
+    local mb = { name = sender }
+    mb.wire = MB.Wire.New({
+        id = mine, peer = peer, room = 254, now = clockNow, lanes = LANES, share = s.lanes,
+        send = function(frame, lane) return raw("W" .. frame, lane) end,
+        deliver = function(msg) if heardFrom(mb, msg) then return end if s.ghost then s.ghost:receive(msg, k) end end,
+        lost = function() if session == s and s.members[k] == mb then dropMember(s, k, "quiet") end end,
+    })
+    s.members[k] = mb
+    record(s, ("seat %d: %s"):format(k, sender))
+    if s.ghost and s.ghost.setMembers then s.ghost:setMembers(memberMask(s)) end
+    raw("LS" .. string.char(s.id, k) .. sender)
+    Print(("%s sat down at your table (%d of %d seats taken)."):format(short(sender), count(s.members) + 1, s.seats))
+end
+local function openTable(seats)
+    session = { id = math.random(1, 120), host = true, state = "linked", table = true, seats = seats, seat = 0, members = {},
+                family = family(), code = gameCode(), epoch = 0, since = clockNow(), lastInvite = -100, lanes = MB.Wire.Lanes(LANES, clockNow) }
+    ticker:Show()
+    plug()
+    Print(("Your table is open, with room for %d more. The others in your party start the same game and type /mb link to sit down. /mb link off closes it."):format(seats - 1))
+end
+local function askForSeat(h, fam)
+    session = { id = h.id, host = false, state = "seating", table = true, seats = h.seats, partner = h.sender, family = fam, code = h.code,
+                epoch = 0, since = clockNow(), lastAsk = clockNow() }
+    ticker:Show()
+    raw("LA" .. string.char(h.id) .. fam)
+    Print(("Asking %s for a seat at their table..."):format(short(h.sender)))
+end
+local function seated(s, k)
+    s.state, s.seat = "linked", k
+    local mine, peer = wireIds(s.id, k)
+    mine, peer = peer, mine                                              -- (the guest's mark is the second of the pair)
+    s.wire = MB.Wire.New({
+        id = mine, peer = peer, room = 254, now = clockNow, lanes = LANES,
+        send = function(frame, lane) return raw("W" .. frame, lane) end,
+        deliver = function(msg) if heardFrom(s, msg) then return end if s.ghost then s.ghost:receive(msg, 0) end end,
+        lost = function() if session == s then unlink(("The link with %s's table went quiet and was closed. /mb link starts again."):format(short(s.partner))) end end,
+    })
+    record(s, ("seated: %d"):format(k))
+    Print(("You sit down at %s's table. Your games can see each other now."):format(short(s.partner)))
     plug()
 end
 
 ticker:SetScript("OnUpdate", function()
     local s = session
     if not s then ticker:Hide() return end
-    if s.state == "linked" then
+    if s.state == "linked" and s.members then
+        for _, mb in pairs(s.members) do mb.wire:tick() end
+        if session ~= s then return end
+        local t = clockNow()
+        for k, mb in pairs(s.members) do
+            local away = beat(mb, mb.wire, t, true)
+            if away and away > TABLE_AWAY then dropMember(s, k, "quiet") end
+        end
+        if count(s.members) < s.seats - 1 and t - s.lastInvite >= TABLE_INVITE_EVERY then
+            s.lastInvite = t
+            raw("LT" .. string.char(s.id, s.seats) .. s.code .. s.family)
+        end
+    elseif s.state == "linked" then
         s.wire:tick()
+        if session ~= s then return end
+        if s.table then                                                 -- (a seat at someone's table)
+            local away = beat(s, s.wire, clockNow(), true)
+            if away and away > TABLE_AWAY then
+                unlink(("%s's table went quiet (they may have gone offline), so you have left it. /mb link finds a table again."):format(short(s.partner)), true)
+            end
+            return
+        end
+        local t = clockNow()
+        -- (our own client froze a while, a loading screen: what the other end said meanwhile is still on its way)
+        if s.tickAt and t - s.tickAt > 3 then s.heardAt = t end
+        s.tickAt = t
+        if MB.IsRunning and MB.IsRunning() and t - math.max(s.beatAt, s.wire.pushedAt or 0) >= BEAT_EVERY then
+            s.beatAt = t
+            s.wire:push("K", true)
+        end
+        if s.beats then
+            local away = t - (s.heardAt or t)
+            if s.ghost then s.ghost.partnerAway = away > AWAY_HOLD end
+            if away > AWAY_TELL and not s.toldAway then
+                s.toldAway = true
+                Print(("%s's game has stopped (paused, a loading screen, or gone offline). Yours waits for it, so that nothing happens on one side only."):format(short(s.partner)))
+            elseif away <= AWAY_HOLD and s.toldAway then
+                s.toldAway = false
+                Print(("%s's game is back; both carry on."):format(short(s.partner)))
+            end
+            if away > AWAY_CLOSE then
+                unlink(("%s's game has not come back for a minute, so the link is closed. If your game shows a communication error, type /mb reset to restart it from your save: a trade only counts once both games have saved it."):format(short(s.partner)), true)
+                return
+            end
+        end
+    elseif s.state == "seating" then
+        local t = clockNow()
+        if t - s.since > ASK_FOR then
+            unlink(("%s's table did not answer. /mb link tries again."):format(short(s.partner)))
+        elseif t - s.lastAsk >= ASK_EVERY then
+            s.lastAsk = t
+            raw("LA" .. string.char(s.id) .. s.family)
+        end
     elseif s.state == "inviting" then
         local t = clockNow()
         if t - s.since > INVITE_FOR then
@@ -658,24 +1011,201 @@ ticker:SetScript("OnUpdate", function()
             s.lastInvite = t
             raw("LI" .. string.char(s.id) .. s.family)
         end
+    elseif s.state == "calling" then                 -- (no party: whispering every spelling of their name)
+        local t = clockNow()
+        if t - s.since > INVITE_FOR then
+            unlink(("%s did not answer. They need MekkaBoy open with a game running, to be online, and (probably) your faction; then they type /mb link."):format(short(s.partner)))
+        elseif t - s.lastInvite >= INVITE_EVERY then
+            s.lastInvite = t
+            for k, name in ipairs(s.candidates) do if not Link.Unreachable(name) then send("LV" .. string.char(s.id, k, MB.PROTOCOL) .. s.family, "WHISPER", name) end end
+        end
+    elseif s.state == "answering" then
+        local t = clockNow()
+        if t - s.since > ASK_FOR then
+            unlink(("%s's MekkaBoy did not hear the answer. /mb link %s tries from your side."):format(short(s.partner), short(s.partner)))
+        elseif t - s.lastAsk >= ASK_EVERY then
+            s.lastAsk = t
+            for j, name in ipairs(s.cands) do if not Link.Unreachable(name) then send("LB" .. string.char(s.id, s.echo, j, MB.PROTOCOL) .. s.family, "WHISPER", name) end end
+        end
     end
 end)
 
+-- ---- the link without a party: whispers to one player ----
+local heardW = {}    -- whispered invitations waiting for an answer: plain name -> { id, k, sender, family, at }
+local toldInvite = {} -- plain name -> when we last said they want to link (kept when the invitation goes)
+local function okId(id) return id and id >= 1 and id <= 120 end
+local function latestInvite()
+    local best
+    for key, h in pairs(heardW) do
+        if clockNow() - h.at > INVITE_FOR then heardW[key] = nil
+        elseif not best or h.at > best.at then best = h end
+    end
+    return best
+end
+local toldProtocol = {}
+local function sayProtocol(sender)
+    local t = clockNow()
+    if toldProtocol[plain(sender)] and t - toldProtocol[plain(sender)] < 60 then return end
+    toldProtocol[plain(sender)] = t
+    Print(("%s's MekkaBoy speaks another link protocol: one of you needs the newer version."):format(short(sender)))
+end
+local function answer(h, fam)
+    local cands = {}
+    spellings(cands, h.sender)
+    session = { id = h.id, host = false, state = "answering", family = fam, peer = h.family, cands = cands, echo = h.k,
+                partner = h.sender, since = clockNow(), lastAsk = -100 }
+    ticker:Show()
+    Print(("Answering %s..."):format(short(h.sender)))
+end
+local function calls(s, sender)
+    for _, name in ipairs(s.candidates) do if nameIs(name, sender) then return true end end
+    return nameIs(s.partner, sender)
+end
+local function heardWhisper(text, sender)
+    if isMyself(sender) then return end
+    local s = session
+    local kind = text:sub(1, 2)
+    if kind:sub(1, 1) == "W" then
+        if s and s.state == "linked" and s.route and s.wire and nameIs(sender, s.partner) then s.wire:receive(text:sub(2)) end
+        return
+    end
+    local id = text:byte(3)
+    if not okId(id) then return end
+    if kind == "LV" then
+        local k, proto, fam = text:byte(4), text:byte(5), text:sub(6)
+        if not (k and proto) or k < 1 or k > 8 or fam == "" or #fam > 12 then return end
+        if proto ~= MB.PROTOCOL then sayProtocol(sender) return end
+        if s and s.state == "calling" and calls(s, sender) then
+            -- both called each other at once: the lower number leads, the other answers
+            if id > s.id or (id == s.id and fullOf(sender) > myFull()) then return end
+            if not fits(fam, s.family) then return end
+            local mine = s.family
+            session = nil
+            answer({ id = id, k = k, sender = sender, family = fam }, mine)
+            return
+        end
+        local key = plain(sender)
+        if s then
+            -- busy with another link: say so (once in a while), and tell them not now
+            if clockNow() - (toldInvite[key] or -100) > 30 then
+                toldInvite[key] = clockNow()
+                Print(("%s wants to link MekkaBoys with you, but you are %s. /mb link off first, then /mb link %s."):format(short(sender),
+                    s.state == "linked" and "linked already" or "busy with another link", short(sender)))
+            end
+            send("LX" .. string.char(id), "WHISPER", sender)
+            return
+        end
+        latestInvite()                                                   -- (old invitations go)
+        local n = 0
+        for _ in pairs(heardW) do n = n + 1 end
+        if not heardW[key] and n >= 20 then return end                   -- (no more than 20 callers at once)
+        local tell = clockNow() - (toldInvite[key] or -100) > 30          -- (one notice per caller every 30 s at most)
+        heardW[key] = { id = id, k = k, sender = sender, family = fam, at = clockNow() }
+        if tell then
+            toldInvite[key] = clockNow()
+            Print(("%s wants to link MekkaBoys with you (no party needed). Start your game and type /mb link %s to answer."):format(short(sender), short(sender)))
+        end
+    elseif kind == "LB" then
+        local k, j, proto, fam = text:byte(4), text:byte(5), text:byte(6), text:sub(7)
+        if not (k and j and proto) or j < 1 or j > 8 then return end
+        if s and s.state == "calling" and id == s.id and calls(s, sender) then
+            if proto ~= MB.PROTOCOL then sayProtocol(sender) return end
+            local target = s.candidates[k]
+            if not target then return end
+            if not fits(fam, s.family) then
+                Print(("%s answered, but is playing a game that cannot link with yours."):format(short(sender)))
+                return
+            end
+            local mine = s.family
+            session = nil
+            linked(sender, id, true, mine, fam, { target = target })
+            raw("LC" .. string.char(id, j))
+        elseif s and s.state == "linked" and s.host and s.route and id == s.id and nameIs(sender, s.partner) then
+            raw("LC" .. string.char(id, j))                  -- (they did not hear it the first time)
+        end
+    elseif kind == "LC" then
+        local j = text:byte(4)
+        if s and s.state == "answering" and id == s.id and j and s.cands[j] and nameIs(sender, s.partner) then
+            local fam, peer = s.family, s.peer
+            session = nil
+            linked(sender, id, false, fam, peer, { target = s.cands[j] })
+        end
+    elseif kind == "LX" then
+        if s and (s.route or s.state == "answering") and id == s.id and nameIs(sender, s.partner) then
+            unlink(("%s ended the link."):format(short(sender)))
+        elseif s and s.state == "calling" and id == s.id and calls(s, sender) then
+            unlink(("%s said no for now."):format(short(sender)))
+        else
+            local key = plain(sender)
+            if heardW[key] and heardW[key].id == id then heardW[key] = nil end      -- (they stopped calling)
+        end
+    end
+end
+
 function Link.Heard(text, channel, sender)
+    if channel == "WHISPER" then heardWhisper(text, sender) return end
     if channel ~= "PARTY" then return end
     local kind = text:sub(1, 2)
     if kind:sub(1, 1) == "W" then
         local s = session
-        if s and s.state == "linked" and plain(sender) == plain(s.partner) then s.wire:receive(text:sub(2)) end
+        if s and s.state == "linked" then
+            if s.members then
+                local _, mb = memberBy(s, sender)
+                if mb then mb.wire:receive(text:sub(2)) end
+            elseif s.wire and not s.route and plain(sender) == plain(s.partner) then
+                s.wire:receive(text:sub(2))
+            end
+        end
         return
     end
-    if isMe(sender) then return end
+    if isMyself(sender) then return end
     local id, fam = text:byte(3), text:sub(4)
-    if not id then return end
+    if not id or id < 1 or id > 120 then return end
     local s = session
-    if (kind == "LI" or kind == "LA") and MB.Hello and MB.Hello.CannotLink(sender) then
+    if (kind == "LI" or kind == "LA" or kind == "LT") and MB.Hello and MB.Hello.CannotLink(sender) then
         -- two copies whose link messages differ: say so (once in a while) instead of linking and going wrong
-        if s and s.state == "inviting" or kind == "LI" then MB.Hello.SayCannotLink(sender) end
+        if s and s.state == "inviting" or kind == "LI" or kind == "LT" then MB.Hello.SayCannotLink(sender) end
+        return
+    end
+    -- the table messages
+    if kind == "LT" then
+        local seats, code, tfam = text:byte(4), text:sub(5, 8), text:sub(9)
+        if not seats or seats < 3 or seats > 5 or #code < 4 then return end
+        local h = { id = id, sender = sender, family = tfam, at = clockNow(), table = true, seats = seats, code = code }
+        if s and s.members and count(s.members) == 0 and s.code == code
+            and (id < s.id or (id == s.id and plain(sender) < plain(UnitName("player") or ""))) then
+            -- two tables opened at once, and nobody has sat at ours yet: the lower number keeps its table
+            local fam = s.family
+            unlink(nil, false)
+            Print(("%s opened a table at the same time; you join theirs instead."):format(short(sender)))
+            askForSeat(h, fam)
+            return
+        end
+        if s or not MB.Alpha() then return end        -- (a stable build has no party tables yet)
+        if not (heard and heard.id == id and heard.table) then
+            Print(("%s has a table with a free seat. Start the same game and type /mb link to sit down."):format(short(sender)))
+        end
+        heard = h
+        return
+    elseif kind == "LA" and s and s.members then
+        if id == s.id then seatMember(s, sender, fam) end
+        return
+    elseif kind == "LS" then
+        local k, name = text:byte(4), text:sub(5)
+        if not (s and s.table and not s.host and id == s.id and plain(sender) == plain(s.partner) and sameAsMe(name)) then return end
+        if s.state == "seating" then
+            if not k or k < 1 or k > 4 then unlink(("%s's table is full."):format(short(sender))) return end
+            seated(s, k)
+        end
+        return
+    elseif kind == "LX" and s and s.members then
+        if id == s.id then
+            local k = memberBy(s, sender)
+            if k then dropMember(s, k, "left") end
+        end
+        return
+    elseif kind == "LX" and s and s.table and not s.host then
+        if id == s.id and plain(sender) == plain(s.partner) then unlink(("%s closed the table."):format(short(sender))) end
         return
     end
     if kind == "LI" then
@@ -734,28 +1264,111 @@ function Link.BlocksKey(button)
 end
 function Link.Session() return session end
 
-function Link.Open()
+local function needGame()
+    local fam = family()
+    if fam then return fam end
+    if machine and not machine.linkPlug and MB.Cable.Changed(machine) then
+        Print("This copy of the game is not the one the link knows: it is another version, or it has been modified. The link is switched off for it, so that nothing gets corrupted.")
+    else
+        Print("Start your game on the MekkaBoy first. The link works with " .. GAMES_TEXT .. ".")
+    end
+end
+-- /mb link <name> or /mb link target: no party, whispers to that one player
+local function callByName(who)
+    local cands = {}
+    if who:lower() == "target" then
+        if not (UnitExists and UnitExists("target") and UnitIsPlayer and UnitIsPlayer("target")) then Print("Target a player first, then /mb link target.") return end
+        cands = unitSpellings("target")
+    else
+        spellings(cands, who)
+    end
+    if #cands == 0 then Print("Could not work out that player's name.") return end
+    for _, name in ipairs(cands) do if isMyself(name) then Print("That is you.") return end end
+    local fam = needGame()
+    if not fam then return end
+    if tableSeats() >= 3 then Print("This game seats a table: tables still need a party for now.") return end
+    session = { id = math.random(1, 120), host = true, state = "calling", family = fam, candidates = cands, partner = cands[1],
+                since = clockNow(), lastInvite = -100 }
+    ticker:Show()
+    Print(("Calling %s (no party needed). They type /mb link to answer: they need MekkaBoy open with a game running."):format(short(cands[1])))
+end
+
+function Link.Open(who)
+    who = who or ""
     if not (MB.Cable and MB.Wire and MB.AdvanceCable) then Print("The link is not installed properly: restart the game client.") return end
+    if session and session.state == "calling" then Print(("Still calling %s... /mb link off stops."):format(short(session.partner))) return end
+    if session and session.state == "answering" then Print(("Still answering %s..."):format(short(session.partner))) return end
+    if session and session.members then
+        local s, names = session, {}
+        for k = 1, s.seats - 1 do if s.members[k] then names[#names + 1] = short(s.members[k].name) end end
+        Print(("Your table: %d of %d seats taken%s. /mb link off closes it."):format(#names + 1, s.seats,
+            #names > 0 and (" (" .. table.concat(names, ", ") .. ")") or ""))
+        return
+    end
+    if session and session.state == "seating" then Print(("Still asking %s for a seat..."):format(short(session.partner))) return end
     if session and session.state == "linked" then
         local s = session
-        Print(("Linked with %s (%s). /mb link off ends it."):format(short(s.partner), s.host and "you lead" or "they lead"))
+        if s.table then Print(("At %s's table, seat %d. /mb link off leaves it."):format(short(s.partner), s.seat)) return end
+        Print(("Linked with %s (%s%s). /mb link off ends it."):format(short(s.partner), s.host and "you lead" or "they lead", s.route and ", over whispers" or ""))
         print(("  messages sent %d (%d of them twice or more, %d turned back by the server); game %s"):format(s.wire.frames, s.wire.resent, s.wire.refused,
             s.ghost and (s.ghost:busy() and ("in a link session, " .. s.ghost.phase) or "not in a link session yet") or "not running or not supported"))
         return
     end
     if session then Print("Still looking for the other MekkaBoy...") return end
-    if not (IsInGroup and IsInGroup()) then
-        Print("Join a party with the other player first: the link runs through party chat.")
+    local KEYWORD = { party = true, yes = true, on = true, accept = true, answer = true, join = true }
+    if KEYWORD[who:lower()] then who = "" end
+    -- /mb link <name> when that player has just invited you: answer them rather than calling back
+    local h
+    if who ~= "" then
+        latestInvite()
+        for _, inv in pairs(heardW) do if nameIs(inv.sender, who) then h = inv end end
+        if not h then callByName(who) return end
+    elseif not (IsInGroup and IsInGroup()) then
+        h = latestInvite()                       -- (in a party, /mb link is the party link, exactly as before)
+    end
+    if h then
+        local fam = needGame()
+        if not fam then return end
+        heardW[plain(h.sender)] = nil
+        if not fits(h.family, fam) then
+            Print(("%s is playing a game that cannot link with yours."):format(short(h.sender)))
+            return
+        end
+        answer(h, fam)
         return
     end
-    local fam = family()
-    if not fam then
-        if machine and not machine.linkPlug and MB.Cable.Changed(machine) then
-            Print("This copy of the game is not the one the link knows: it is another version, or it has been modified. The link is switched off for it, so that nothing gets corrupted.")
-        else
-            Print("Start your game on the MekkaBoy first. The link works with " .. GAMES_TEXT .. ".")
-        end
+    if not (IsInGroup and IsInGroup()) then
+        Print("Join a party with the other player, or link without one: /mb link <their name> (or target them and /mb link target).")
         return
+    end
+    local fam = needGame()
+    if not fam then return end
+    local seats = tableSeats()
+    if seats >= 3 and not MB.Alpha() then
+        Print("This game's party table is still being tested and comes in a later version. Play it on your own for now.")
+        return
+    end
+    if seats >= 3 then
+        -- this game seats more than two: sit at the table someone has open, or open one
+        if heard and heard.table and clockNow() - heard.at < INVITE_FOR then
+            local h = heard
+            heard = nil
+            if h.code ~= gameCode() then
+                Print(("%s's table is for another game. Start the same game to sit down."):format(short(h.sender)))
+                return
+            end
+            askForSeat(h, fam)
+            return
+        end
+        openTable(seats)
+        return
+    end
+    if heard and heard.table then
+        if clockNow() - heard.at < INVITE_FOR then
+            Print(("%s's table is for another game. Start the same game to sit down."):format(short(heard.sender)))
+            return
+        end
+        heard = nil
     end
     if heard and clockNow() - heard.at < INVITE_FOR then
         local h = heard
@@ -775,12 +1388,20 @@ end
 
 function Link.Close()
     if not session then Print("There is no link to end.") return end
-    unlink("Link ended.", session.state == "linked")
+    local s = session
+    if s.state == "calling" or s.state == "answering" then
+        for _, name in ipairs(s.candidates or s.cands or {}) do send("LX" .. string.char(s.id), "WHISPER", name) end
+        session = nil
+        ticker:Hide()
+        Print("Stopped.")
+        return
+    end
+    unlink(session.members and "Your table is closed." or "Link ended.", session.state == "linked" or session.table)
 end
 
-MB.AddCommand("link", "link - join the other MekkaBoy in your party, to trade and battle; link off ends it", function(rest)
-    rest = rest:lower()
-    if rest == "off" or rest == "end" or rest == "stop" then Link.Close() else Link.Open() end
+MB.AddCommand("link", "link - join the other MekkaBoy in your party, to trade and battle; link <name>|target links without a party; link off ends it", function(rest)
+    local word = rest:lower()
+    if word == "off" or word == "end" or word == "stop" then Link.Close() else Link.Open(rest) end
 end)
 
 MB.AddCommand("ping", "ping target|me|party|<player> - test the link to another MekkaBoy (they just need it installed)", function(rest)
@@ -817,4 +1438,46 @@ do
             t.heardEvents[#t.heardEvents + 1] = ("%.1f %s: %s; %s; %s; %s; .. %s; %s"):format(t.clock, event, show(a), show(b2), show(c), show(d), show(h), show(i))
         end
     end)
+end
+
+-- A whisper to a spelling of a name nobody has (or to a friend who is offline) makes the server say "No player
+-- named ... is currently playing." MekkaBoy whispers several spellings on purpose, so those lines are kept out of
+-- the chat window when the name is one it whispered in the last ten seconds, and the spelling is noted as unreachable.
+do
+    local fmt = type(ERR_CHAT_PLAYER_NOT_FOUND_S) == "string" and ERR_CHAT_PLAYER_NOT_FOUND_S or "No player named '%s' is currently playing."
+    local pattern = "^" .. fmt:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"):gsub("%%%%s", "(.+)") .. "$"
+    -- The line names one spelling. Only that one is unreachable: "Ana-Lyse" not being found says nothing about
+    -- "Ana Lyse" (nameIs would call them the same player, and the spelling that works would be shut off too).
+    local function sameSpelling(w, name)
+        local a, b = w:lower(), name:lower()
+        if a == b then return true end
+        local r = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName())
+        if type(r) ~= "string" or r == "" then return false end
+        r = "-" .. r:lower()
+        return a == b .. r or b == a .. r
+    end
+    Link.SameSpelling = sameSpelling
+    local function ours(msg)
+        if type(msg) ~= "string" then return false end
+        local name = msg:match(pattern)
+        if not name then return false end
+        local hit = false
+        for w, t in pairs(whispered) do
+            if GetTime() - t > 10 then whispered[w] = nil
+            elseif sameSpelling(w, name) then unreachable[w] = GetTime() hit = true end
+        end
+        return hit
+    end
+    Link.NotFoundLine = ours
+    local seen = CreateFrame("Frame")                -- (noted even when no chat window shows system lines)
+    seen:RegisterEvent("CHAT_MSG_SYSTEM")
+    seen:SetScript("OnEvent", function(_, _, msg) pcall(ours, msg) end)
+    if ChatFrame_AddMessageEventFilter then          -- (and kept out of the chat windows)
+        ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(_, _, msg)
+            if type(msg) ~= "string" or not msg:match(pattern) then return false end
+            local name = msg:match(pattern)
+            for w in pairs(unreachable) do if GetTime() - unreachable[w] < 10 and nameIs(w, name) then return true end end
+            return ours(msg)
+        end)
+    end
 end
