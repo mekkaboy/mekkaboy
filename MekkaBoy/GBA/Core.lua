@@ -1270,6 +1270,7 @@ local function buildCPU(S)
     -- ---- the translator ----
     local blocks, made = {}, 0
     S.blocks = blocks
+    local overlayOf = {}                    -- decoded cartridge instruction -> the metatable its notes read through
     local CHUNK_ARGS = "local r, iw, ew, rd8, rd16, rd32, wr8, wr16, wr32, band, bor, bxor, mul, umull, smull, add64, floor, lslr, lsrr, asrr, rorr, "
         .. "swi, getCPSR, getSPSR, setPSR, retSPSR, getUsr, setUsr, undefined = ..."
 
@@ -1281,8 +1282,14 @@ local function buildCPU(S)
         local limit = thumb and MAX_STRETCH or 32
         while #ins < limit do
             local d0 = decode(key)
-            local d = {}
-            for k, v in pairs(d0) do d[k] = v end       -- our own copy: notes get scribbled on it
+            -- our own copy, for the notes that get scribbled on it: an empty table that reads through to the decoded
+            -- instruction (rather than a copy of every field, which made most of a translation's garbage)
+            local mt = overlayOf[d0]
+            if not mt then
+                mt = { __index = d0 }
+                if key >= 134217728 then overlayOf[d0] = mt end      -- (as long-lived as the decoded instruction itself)
+            end
+            local d = setmetatable({}, mt)
             ins[#ins + 1] = d
             if d.term then break end
             key = key + d.len
@@ -2390,6 +2397,108 @@ local function buildPPU(S)
         end
     end
 
+    -- The same, for the first layer laid on a line: where it is see-through it puts down the backdrop color
+    -- (back), so the line need not be filled with the backdrop first and then mostly painted over. Every dot of
+    -- the line is written exactly once, with what filling and then drawing would have left there.
+    local function textBGFill(n, y, o, fb, pal, back)
+        local cnt = io[8 + n * 2]
+        local charBase = (floor(cnt / 4) % 4) * 16384
+        local mapBase = (floor(cnt / 256) % 32) * 2048
+        local size = floor(cnt / 16384)
+        local eight = floor(cnt / 128) % 2 == 1
+        local wide, tall = size % 2 == 1, size >= 2
+        local yy = (y + io[0x12 + n * 4]) % (tall and 512 or 256)
+        local rowBase = mapBase + (floor(yy / 8) % 32) * 64
+        if yy >= 256 then rowBase = rowBase + (wide and 4096 or 2048) end
+        if rowBlank(rowBase, charBase, eight, cnt) and (not wide or rowBlank(rowBase + 2048, charBase, eight, cnt)) then
+            for p = o, o + 239 do fb[p] = back end
+            return true
+        end
+        local ty = yy % 8
+        local xx = io[0x10 + n * 4] % 512
+        local px = -(xx % 8)
+        local col = floor(xx / 8)
+        local cols = wide and 64 or 32
+        local vram, vnib, vrow, vcls = vram, vnib, vrow, vcls
+        while px <= 239 do
+            local c = col % cols
+            local mi = rowBase + (c % 32) * 2
+            if c >= 32 then mi = mi + 2048 end
+            local e = vram[mi] + vram[mi + 1] * 256
+            local tile = e % 1024
+            local flips = floor(e / 1024) % 4
+            local row = (flips >= 2) and (7 - ty) or ty
+            local p = o + px
+            if not eight then
+                local rb = charBase + tile * 32 + row * 4
+                local b = rb * 2
+                local cls = vcls[rb / 4]
+                if not cls then
+                    local zeros = 0
+                    for k = b, b + 7 do if vnib[k] == 0 then zeros = zeros + 1 end end
+                    cls = (zeros == 8) and 0 or ((zeros == 0) and 1 or 2)
+                    vcls[rb / 4] = cls
+                end
+                if px >= 0 and px <= 232 then
+                    if cls == 0 then
+                        fb[p], fb[p + 1], fb[p + 2], fb[p + 3], fb[p + 4], fb[p + 5], fb[p + 6], fb[p + 7] = back, back, back, back, back, back, back, back
+                    else
+                        local pb = floor(e / 4096) * 16
+                        if cls == 1 then
+                            if flips % 2 == 1 then
+                                fb[p], fb[p + 1], fb[p + 2], fb[p + 3], fb[p + 4], fb[p + 5], fb[p + 6], fb[p + 7] =
+                                    pal[pb + vnib[b + 7]], pal[pb + vnib[b + 6]], pal[pb + vnib[b + 5]], pal[pb + vnib[b + 4]],
+                                    pal[pb + vnib[b + 3]], pal[pb + vnib[b + 2]], pal[pb + vnib[b + 1]], pal[pb + vnib[b]]
+                            else
+                                fb[p], fb[p + 1], fb[p + 2], fb[p + 3], fb[p + 4], fb[p + 5], fb[p + 6], fb[p + 7] =
+                                    pal[pb + vnib[b]], pal[pb + vnib[b + 1]], pal[pb + vnib[b + 2]], pal[pb + vnib[b + 3]],
+                                    pal[pb + vnib[b + 4]], pal[pb + vnib[b + 5]], pal[pb + vnib[b + 6]], pal[pb + vnib[b + 7]]
+                            end
+                        else
+                            local c0, c1, c2, c3, c4, c5, c6, c7
+                            if flips % 2 == 1 then c7, c6, c5, c4, c3, c2, c1, c0 = vnib[b], vnib[b + 1], vnib[b + 2], vnib[b + 3], vnib[b + 4], vnib[b + 5], vnib[b + 6], vnib[b + 7]
+                            else c0, c1, c2, c3, c4, c5, c6, c7 = vnib[b], vnib[b + 1], vnib[b + 2], vnib[b + 3], vnib[b + 4], vnib[b + 5], vnib[b + 6], vnib[b + 7] end
+                            if c0 ~= 0 then fb[p] = pal[pb + c0] else fb[p] = back end
+                            if c1 ~= 0 then fb[p + 1] = pal[pb + c1] else fb[p + 1] = back end
+                            if c2 ~= 0 then fb[p + 2] = pal[pb + c2] else fb[p + 2] = back end
+                            if c3 ~= 0 then fb[p + 3] = pal[pb + c3] else fb[p + 3] = back end
+                            if c4 ~= 0 then fb[p + 4] = pal[pb + c4] else fb[p + 4] = back end
+                            if c5 ~= 0 then fb[p + 5] = pal[pb + c5] else fb[p + 5] = back end
+                            if c6 ~= 0 then fb[p + 6] = pal[pb + c6] else fb[p + 6] = back end
+                            if c7 ~= 0 then fb[p + 7] = pal[pb + c7] else fb[p + 7] = back end
+                        end
+                    end
+                else
+                    -- a tile cut off by the edge of the screen: only the dots that show
+                    local pb = floor(e / 4096) * 16
+                    local from, to = 0, 7
+                    if px < 0 then from = -px end
+                    if px > 232 then to = 239 - px end
+                    for k = from, to do
+                        local ci = vnib[(flips % 2 == 1) and (b + 7 - k) or (b + k)]
+                        if ci ~= 0 then fb[p + k] = pal[pb + ci] else fb[p + k] = back end
+                    end
+                end
+            else
+                local b = charBase + tile * 64 + row * 8
+                local from, to = 0, 7
+                if px < 0 then from = -px end
+                if px > 232 then to = 239 - px end
+                if vrow[b / 4] + vrow[b / 4 + 1] == 0 then
+                    for k = from, to do fb[p + k] = back end
+                else
+                    for k = from, to do
+                        local ci = vram[b + ((flips % 2 == 1) and (7 - k) or k)]
+                        if ci ~= 0 then fb[p + k] = pal[ci] else fb[p + k] = back end
+                    end
+                end
+            end
+            px = px + 8
+            col = col + 1
+        end
+        return false
+    end
+
     local function blankNow(n, y)
         local cnt = io[8 + n * 2]
         local charBase = (floor(cnt / 4) % 4) * 16384
@@ -2496,6 +2605,7 @@ local function buildPPU(S)
     for y = 0, 159 do lineSprites[y] = {} end
     S.lineSprites = lineSprites
     local sprX, sprY, sprW, sprH, sprBW = {}, {}, {}, {}, {}
+    local sprPrio, sprMode = {}, {}             -- (its priority, and its kind: 1 see-through, 2 a "window" sprite)
     local lineSpecial, lineWinObj = {}, {}      -- lines crossed by a see-through sprite, or by a "window" sprite
     -- Each line also keeps a fingerprint of the sprites that cross it, so that a sprite moving in one
     -- corner does not make the painter redo the lines it never touches.
@@ -2524,6 +2634,7 @@ local function buildPPU(S)
                 if x0 + bw > 0 and y0 + bh > 0 then
                     sprX[i], sprY[i], sprW[i], sprH[i], sprBW[i] = x0, y0, w, h, bw
                     local objMode = floor(a0 / 1024) % 4
+                    sprPrio[i], sprMode[i] = floor(oam[i * 4 + 2] / 1024) % 4, objMode
                     local f1, f2 = a0 + a1 * 65536 + i * 2654435761, oam[i * 4 + 2]
                     if affine then
                         local g = (floor(a1 / 512) % 32) * 16
@@ -2598,6 +2709,22 @@ local function buildPPU(S)
                             if ci ~= 0 then fb[o + x] = pal[pb + ci] end
                         end
                     end
+                elseif sx >= 0 and sx <= 232 then
+                    -- (wholly on the screen, as most are: the eight dots without asking about the edges)
+                    local t = (tile + trow * perRow + tcol) % 1024
+                    local b = (0x10000 + t * 32 + inRow * 4) * 2
+                    local c0, c1, c2, c3, c4, c5, c6, c7
+                    if hflip then c7, c6, c5, c4, c3, c2, c1, c0 = vnib[b], vnib[b + 1], vnib[b + 2], vnib[b + 3], vnib[b + 4], vnib[b + 5], vnib[b + 6], vnib[b + 7]
+                    else c0, c1, c2, c3, c4, c5, c6, c7 = vnib[b], vnib[b + 1], vnib[b + 2], vnib[b + 3], vnib[b + 4], vnib[b + 5], vnib[b + 6], vnib[b + 7] end
+                    local p = o + sx
+                    if c0 ~= 0 then fb[p] = pal[pb + c0] end
+                    if c1 ~= 0 then fb[p + 1] = pal[pb + c1] end
+                    if c2 ~= 0 then fb[p + 2] = pal[pb + c2] end
+                    if c3 ~= 0 then fb[p + 3] = pal[pb + c3] end
+                    if c4 ~= 0 then fb[p + 4] = pal[pb + c4] end
+                    if c5 ~= 0 then fb[p + 5] = pal[pb + c5] end
+                    if c6 ~= 0 then fb[p + 6] = pal[pb + c6] end
+                    if c7 ~= 0 then fb[p + 7] = pal[pb + c7] end
                 else
                     local t = (tile + trow * perRow + tcol) % 1024
                     local b = (0x10000 + t * 32 + inRow * 4) * 2
@@ -2784,7 +2911,7 @@ local function buildPPU(S)
     -- with an already-faded set of colors.
     local palL, palLFor = {}, -1
     for l = 0, 4 do palL[l] = {} end
-    local palF, palFFor = {}, ""
+    local palF, palFStamp, palFLevel, palFUp = {}, nil, nil, nil   -- (what palF was last made for)
     local function layered(y, o, dispcnt, list, oneD, masked, effect)
         local mode = dispcnt % 8
         local bld = io[0x50]
@@ -2813,9 +2940,9 @@ local function buildPPU(S)
             pals = palL
             back = back + 163840
         elseif fading then
-            local want = S.palStamp .. ":" .. level .. ":" .. effect
-            if palFFor ~= want then
-                palFFor = want
+            -- (asked on every line of a fade: compared as numbers, not as a string made each time)
+            if palFStamp ~= S.palStamp or palFLevel ~= level or palFUp ~= effect then
+                palFStamp, palFLevel, palFUp = S.palStamp, level, effect
                 for i = 0, 511 do palF[i] = faded(pal[i], level, effect == 2) end
             end
             if firstT[5] then back = palF[0] end
@@ -3023,6 +3150,24 @@ local function buildPPU(S)
         for j = 1, n do to[j] = from[j] end
         stSpN[k] = n
     end
+    -- The order the backgrounds are laid down in: priority 3 first, and within a priority background 3 first.
+    -- Worked out again only when the switches or the priorities change (ordBg[1..n], with ordPrio beside it).
+    local ordKey, ordN, ordBg, ordPrio = -1, 0, {}, {}
+    local function layerOrder(dispcnt)
+        local key = floor(dispcnt / 256) % 16 + (io[8] % 4) * 16 + (io[10] % 4) * 64 + (io[12] % 4) * 256 + (io[14] % 4) * 1024
+        if key ~= ordKey then
+            ordKey, ordN = key, 0
+            for prio = 3, 0, -1 do
+                for n = 3, 0, -1 do
+                    if floor(dispcnt / POW[8 + n]) % 2 == 1 and io[8 + n * 2] % 4 == prio then
+                        ordN = ordN + 1
+                        ordBg[ordN], ordPrio[ordN] = n, prio
+                    end
+                end
+            end
+        end
+        return ordN
+    end
     local movedOs, movedCs, movedFor, movedX, movedY, movedSame, movedStill      -- (the last answer to "how far has it moved")
     local redo, MOST = {}, 150                  -- the stretches of a line to redo; beyond MOST dots, just draw the line
     local function slide(y, o, dispcnt, at, dx, dy, still, os, list, oneD)
@@ -3117,16 +3262,19 @@ local function buildPPU(S)
             for j = 1, n, 2 do
                 for p = o + redo[j], o + redo[j + 1] do fb[p] = back end
             end
+            local nl, q = layerOrder(dispcnt), 1
             for prio = 3, 0, -1 do
-                for bg = 3, 0, -1 do
-                    if floor(dispcnt / POW[8 + bg]) % 2 == 1 and io[8 + bg * 2] % 4 == prio and floor(blanks / POW[bg]) % 2 == 0 then
+                while q <= nl and ordPrio[q] == prio do
+                    local bg = ordBg[q]
+                    q = q + 1
+                    if floor(blanks / POW[bg]) % 2 == 0 then
                         for j = 1, n, 2 do textBG(bg, y, o, fb, pal, redo[j], redo[j + 1]) end
                     end
                 end
                 if list then
                     for k = 1, #list do
                         local i = list[k]
-                        if floor(oam[i * 4 + 2] / 1024) % 4 == prio and floor(oam[i * 4] / 1024) % 4 ~= 2 then sprite(i, y, o, oneD, fb, pal) end
+                        if sprPrio[i] == prio and sprMode[i] ~= 2 then sprite(i, y, o, oneD, fb, pal) end
                     end
                 end
             end
@@ -3262,20 +3410,26 @@ local function buildPPU(S)
             if not slid then
                 local back = pal[0]
                 local blanks = 0
-                for p = o, o + 239 do fb[p] = back end
+                local nl, q = layerOrder(dispcnt), 1
+                local filled = false                    -- (the first layer down lays the backdrop in its gaps)
                 for prio = 3, 0, -1 do
-                    for n = 3, 0, -1 do
-                        if floor(dispcnt / POW[8 + n]) % 2 == 1 and io[8 + n * 2] % 4 == prio then
-                            if textBG(n, y, o, fb, pal) then blanks = blanks + POW[n] end
-                        end
+                    while q <= nl and ordPrio[q] == prio do
+                        local n = ordBg[q]
+                        q = q + 1
+                        local blank
+                        if filled then blank = textBG(n, y, o, fb, pal)
+                        else blank = textBGFill(n, y, o, fb, pal, back) filled = true end
+                        if blank then blanks = blanks + POW[n] end
                     end
                     if list then
+                        if not filled then for p = o, o + 239 do fb[p] = back end filled = true end
                         for k = 1, #list do
                             local i = list[k]
-                            if floor(oam[i * 4 + 2] / 1024) % 4 == prio and floor(oam[i * 4] / 1024) % 4 ~= 2 then sprite(i, y, o, oneD, fb, pal) end
+                            if sprPrio[i] == prio and sprMode[i] ~= 2 then sprite(i, y, o, oneD, fb, pal) end
                         end
                     end
                 end
+                if not filled then for p = o, o + 239 do fb[p] = back end end
                 lineBlank[y] = blanks
             end
             lineKind[y], lineSnap[y] = dispcnt, cs
@@ -3283,25 +3437,28 @@ local function buildPPU(S)
         else
             lineKind[y], lineSnap[y] = false, nil
             local back = pal[0]
-            for p = o, o + 239 do fb[p] = back end
+            local nl, q = layerOrder(dispcnt), 1
+            local filled = false                        -- (a tiled first layer lays the backdrop in its gaps)
             for prio = 3, 0, -1 do
-                for n = 3, 0, -1 do
-                    if floor(dispcnt / POW[8 + n]) % 2 == 1 and io[8 + n * 2] % 4 == prio then
-                        if mode == 0 then textBG(n, y, o, fb, pal)
-                        elseif mode == 1 then
-                            if n < 2 then textBG(n, y, o, fb, pal) elseif n == 2 then affineBG(2, y, o, fb, pal) end
-                        elseif mode == 2 then
-                            if n >= 2 then affineBG(n, y, o, fb, pal) end
-                        elseif n == 2 then bitmapBG(mode, y, o, fb, pal, 0) end
+                while q <= nl and ordPrio[q] == prio do
+                    local n = ordBg[q]
+                    q = q + 1
+                    if mode == 0 or (mode == 1 and n < 2) then
+                        if filled then textBG(n, y, o, fb, pal) else textBGFill(n, y, o, fb, pal, back) filled = true end
+                    elseif (mode == 1 and n == 2) or (mode == 2 and n >= 2) or (mode >= 3 and n == 2) then
+                        if not filled then for p = o, o + 239 do fb[p] = back end filled = true end
+                        if mode <= 2 then affineBG(n, y, o, fb, pal) else bitmapBG(mode, y, o, fb, pal, 0) end
                     end
                 end
                 if list then
+                    if not filled then for p = o, o + 239 do fb[p] = back end filled = true end
                     for k = 1, #list do
                         local i = list[k]
-                        if floor(oam[i * 4 + 2] / 1024) % 4 == prio and floor(oam[i * 4] / 1024) % 4 ~= 2 then sprite(i, y, o, oneD, fb, pal) end
+                        if sprPrio[i] == prio and sprMode[i] ~= 2 then sprite(i, y, o, oneD, fb, pal) end
                     end
                 end
             end
+            if not filled then for p = o, o + 239 do fb[p] = back end end
         end
         -- the turn-and-scale backgrounds step on by their per-line amounts
         stepRefs(mode)
@@ -3673,8 +3830,8 @@ local function buildSystem(S)
         if S.listen then S.soundFlush() end
     end
 
+    local bitOf = { a = 1, b = 2, select = 4, start = 8, right = 16, left = 32, up = 64, down = 128, r = 256, l = 512 }
     function S.setKey(name, down)
-        local bitOf = { a = 1, b = 2, select = 4, start = 8, right = 16, left = 32, up = 64, down = 128, r = 256, l = 512 }
         local b = bitOf[name]
         if not b then return end
         local isUp = floor(keys / b) % 2 == 1
@@ -3813,17 +3970,33 @@ local BIG = {   -- name, table on S, entries, bytes each, pack, unpack
     { "vram", "vram", 0x18000, 1, PACK.bytes, PACK.unbytes }, { "pal", "palRaw", 512, 2, PACK.halves, PACK.unhalves },
     { "oam", "oam", 512, 2, PACK.halves, PACK.unhalves }, { "flash", "flash", 131072, 1, PACK.bytes, PACK.unbytes },
 }
--- a short fingerprint of the game's code (its first 16K and its size): a resume point from a different build is no use
+-- The game's identity, from every byte of it and its size: a resume point or memory valve made with a different build
+-- (one changed byte anywhere) is refused. Worked out once per cartridge put in (about a quarter second for 16 MB).
+-- Before 0.20.2 the stamp sampled every 61st byte of the first 16K: romLegacy is that, to recognise the old stamps.
 local function romStampOf(S)
     local stamp
     return function()
         if stamp then return stamp end
-        local bank = S.romBanks[1] or ""
-        local sum = 0
-        for i = 1, #bank, 61 do sum = (sum * 31 + bank:byte(i)) % 1000000007 end
-        stamp = tostring(S.romSize) .. ":" .. tostring(#bank) .. ":" .. tostring(sum)
+        local byte, h1, h2 = string.byte, 0, 0
+        for k = 1, math.ceil(S.romSize / S.bankSize) do              -- (the pieces are read in as asked for: # would be 0)
+            local s = S.romBanks[k] or ""
+            for i = 1, #s, 16 do
+                local a, b, c, d, e, f, g, h, i2, j, kk, l, m, n, o, p = byte(s, i, i + 15)
+                h1 = (h1 * 31 + (a or 0) + (b or 0) * 3 + (c or 0) * 5 + (d or 0) * 7 + (e or 0) * 11 + (f or 0) * 13 + (g or 0) * 17
+                      + (h or 0) * 19 + (i2 or 0) * 23 + (j or 0) * 29 + (kk or 0) * 37 + (l or 0) * 41 + (m or 0) * 43 + (n or 0) * 47
+                      + (o or 0) * 53 + (p or 0) * 59) % 4294967291
+            end
+            h2 = (h2 * 131 + h1 + #s) % 4294967279
+        end
+        stamp = "2:" .. tostring(S.romSize) .. ":" .. tostring(h1) .. ":" .. tostring(h2)
         return stamp
     end
+end
+local function romLegacyOf(S)
+    local bank = S.romBanks[1] or ""
+    local sum = 0
+    for i = 1, #bank, 61 do sum = (sum * 31 + bank:byte(i)) % 1000000007 end
+    return tostring(S.romSize) .. ":" .. tostring(#bank) .. ":" .. tostring(sum)
 end
 local function buildState(S)
     S.romStamp = romStampOf(S)
@@ -3832,16 +4005,41 @@ local function buildState(S)
         for _, b in ipairs(BIG) do st.m[b[1]] = PACK.text(b[5](S[b[2]], b[3])) end
         return st
     end
+    local function restore(st, bins)
+        for _, b in ipairs(BIG) do b[6](S[b[2]], b[3], bins[b[1]]) end
+        S.cpuLoad(st.cpu)
+        S.biosLoad(st.bios)
+        S.sysLoad(st.sys)
+        S.busLoad(st.bus)           -- (last: it also tells the screen that everything has changed)
+    end
     -- false and a reason if the photograph cannot be used; the machine is only touched once all of it has been read
     function S.loadState(st)
         if type(st) ~= "table" or st.v ~= 1 or st.kind ~= "gba" or type(st.m) ~= "table" then return false, "not a save for this kind of game" end
         for _, part in ipairs({ "cpu", "bus", "sys", "bios" }) do
             if type(st[part]) ~= "table" then return false, "the save is incomplete" end
         end
-        if type(st.cpu.r) ~= "table" or #st.cpu.r ~= 16 or type(st.sys.io) ~= "table" or type(st.bus.cTime) ~= "table" then return false, "the save is incomplete" end
-        if st.rom and st.rom ~= S.romStamp() then return false, "the game has changed since this resume point was kept" end
-        -- (our own cartridges change build by build; one of theirs kept before resume points carried a stamp may be from any build)
-        if not st.rom and (S.romBanks[1] or ""):sub(0xAD, 0xAE) == "MB" then return false, "the game has changed since this resume point was kept" end
+        -- the registers: every list there, as long as this machine's, numbers all through
+        local function list(t, n) if type(t) ~= "table" then return false end for i = 1, n do if type(t[i]) ~= "number" then return false end end return true end
+        local c = st.cpu
+        if not (list(c.r, 16) and list(c.sp, 7) and list(c.lr, 7) and list(c.spsr, 7) and list(c.fiq, 5) and list(c.usr, 5)
+                and type(c.mode) == "number" and type(c.nz) == "number" and type(c.cyc) == "number") then return false, "the save is incomplete" end
+        local y = st.sys
+        if not (type(y.io) == "table" and list(y.tReload, 4) and list(y.tCtl, 4) and list(y.tStart, 4) and list(y.tValue, 4)
+                and list(y.dSrc, 4) and list(y.dDst, 4) and list(y.dCnt, 4) and type(y.dOn) == "table" and list(y.aPtr, 2) and list(y.aLast, 2)
+                and list(y.aFrac, 2) and list(y.refX, 2) and list(y.refY, 2) and type(y.IE) == "number" and type(y.IF) == "number"
+                and type(y.vcount) == "number" and type(y.frameNo) == "number") then return false, "the save is incomplete" end
+        if type(st.bus.cTime) ~= "table" then return false, "the save is incomplete" end
+        local ours = (S.romBanks[1] or ""):sub(0xAD, 0xAE) == "MB"
+        local stamp = type(st.rom) == "string" and st.rom or nil
+        if stamp and stamp:sub(1, 2) == "2:" then
+            if stamp ~= S.romStamp() then return false, "it was kept with a different build of this game" end
+        elseif ours then
+            -- (our own cartridges change build by build, and an older stamp cannot tell builds apart)
+            return false, "it was kept with an earlier build of this game"
+        elseif stamp ~= nil and stamp ~= romLegacyOf(S) then
+            return false, "it was kept with a different build of this game"
+        end
+        -- (an older point for a game of yours whose old stamp still matches is taken once: the next one kept carries the full stamp)
         local bins = {}
         for _, b in ipairs(BIG) do
             local bin, why = PACK.bin(st.m[b[1]])
@@ -3849,11 +4047,15 @@ local function buildState(S)
             if #bin ~= b[3] * b[4] then return false, "the save is damaged" end
             bins[b[1]] = bin
         end
-        for _, b in ipairs(BIG) do b[6](S[b[2]], b[3], bins[b[1]]) end
-        S.cpuLoad(st.cpu)
-        S.biosLoad(st.bios)
-        S.sysLoad(st.sys)
-        S.busLoad(st.bus)           -- (last: it also tells the screen that everything has changed)
+        -- (all of it has been read and checked; should putting it in still fail - a part of a damaged state the checks above
+        -- do not look into - the machine is put back exactly as it was)
+        local before, back = { cpu = S.cpuSave(), bus = S.busSave(), sys = S.sysSave(), bios = S.biosSave() }, {}
+        for _, b in ipairs(BIG) do back[b[1]] = b[5](S[b[2]], b[3]) end
+        local ok, err = pcall(restore, st, bins)
+        if not ok then
+            restore(before, back)
+            return false, "the save is damaged (" .. tostring(err) .. ")"
+        end
         return true
     end
 end

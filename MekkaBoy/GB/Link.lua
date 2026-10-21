@@ -133,6 +133,14 @@ local function onMessage(text, channel, sender, lane)
         if Link.Heard then Link.Heard(text, channel, sender) end
         return
     end
+    if kind == "F" then                           -- who has MekkaBoy and what they are playing (Friends.lua)
+        if MB.Friends and MB.Friends.Heard then MB.Friends.Heard(text, channel, sender) end
+        return
+    end
+    if kind == "J" then                           -- did both games keep a trade? (GBA/Trade3.lua)
+        if MB.Trade3 and MB.Trade3.Heard then pcall(MB.Trade3.Heard, text, channel, sender) end
+        return
+    end
     if kind == "G" then                           -- other trainers walking in your game (GBA/Ghosts.lua)
         if MB.Ghosts and MB.Ghosts.Heard then MB.Ghosts.Heard(text, channel, sender) end
         return
@@ -252,6 +260,8 @@ function Link.Resolve(name, cb, unit)
     return cands
 end
 Link.Spellings = function(name) local t = {} spellings(t, name) return t end
+Link.UnitSpellings = function(unit) return unitSpellings(unit) end
+Link.EXTRA_LANE = EXTRA_LANE
 
 -- ---------------------------------------------------------------- test ---
 local function mark(kind, n, payload, channel, target, lane)
@@ -578,6 +588,17 @@ local TABLE_INVITE_EVERY, ASK_EVERY, ASK_FOR = 4, 3, 30
 local function wireIds(id, k) local h = ((id - 1 + 40 * (k - 1)) % 120) + 1 return h, h + 125 end
 local GAMES_TEXT = "Pokemon Red, Blue, Yellow, Gold, Silver, Crystal, Ruby, Sapphire, Emerald, FireRed and LeafGreen, and MekkaBoy's own games"
 local function fits(a, b) return MB.Cable.Compatible(a, b) end
+-- MekkaBoy's own games all share the "native" link, but each only talks to itself: the family sent for one of them names
+-- the game too ("native:MBCC"), so Overload never links with Gearworks. A MekkaBoy from before 0.20.2 sends a bare
+-- "native", which matches nothing: the two cannot tell whether their games agree.
+local function isNative(f) return type(f) == "string" and f:sub(1, 6) == "native" end
+local function whyNot(theirs, mine)
+    if isNative(theirs) and isNative(mine) then
+        if theirs == "native" or mine == "native" then return "is using another version of MekkaBoy (both of you need 0.20.2 or later)" end
+        return "is playing a different MekkaBoy game (start the same one)"
+    end
+    return "is playing a game that cannot link with yours"
+end
 -- where a game's link desk is
 local function desk(fam)
     if fam == "gen3" then return "the attendant on the right, upstairs in a Pokemon Center (both of you pick the same thing)" end
@@ -625,19 +646,24 @@ local function cableFor(m)
     if m.linkPlug then return MB.AdvanceCable end
     return MB.Cable
 end
+local gameCode
 local function family()
     local cable = cableFor(machine)
-    return cable and cable.Family(machine) or nil
+    local f = cable and cable.Family(machine) or nil
+    if f == "native" then return "native:" .. gameCode() end
+    return f
 end
 local function short(name) return (tostring(name):gsub("%-[^%-]*$", "")) end
 Link.Short = short
+function Link.Family() return family() end            -- (what the game in the console links as: Friends.lua says it to others)
+local function friendsSay(what, ...) if MB.Friends and MB.Friends[what] then pcall(MB.Friends[what], ...) end end
 -- the seats the running game's table wants (0: an ordinary two-player link)
 local function tableSeats()
     local m = machine
     if m and m.linkPlug and MB.AdvanceCable and MB.AdvanceCable.Seats then return MB.AdvanceCable.Seats(m) end
     return 0
 end
-local function gameCode()
+function gameCode()
     local m = machine
     if m and m.linkPlug and MB.AdvanceCable and MB.AdvanceCable.Code then return MB.AdvanceCable.Code(m) end
     return ""
@@ -764,6 +790,7 @@ local function record(s, what)
     if s.table then s.log.seats, s.log.seat = s.seats, s.seat end
 end
 
+local unlink
 local function plug()
     local s = session
     if not (s and s.state == "linked") then return end
@@ -771,7 +798,7 @@ local function plug()
         if s.ghost then pcall(s.ghost.detach, s.ghost) s.ghost = nil end
         if not machine then return end
         if family() ~= s.family or gameCode() ~= s.code then
-            Print("This game cannot sit at that table: it is for another of MekkaBoy's games.")
+            unlink(s.host and "The cartridge changed, so your table was closed." or "The cartridge changed, so you left the table.", true)
             return
         end
         local send
@@ -802,7 +829,9 @@ local function plug()
     end
     if not machine then return end
     if family() ~= s.family then
-        Print("This game cannot use the link. It works with " .. GAMES_TEXT .. ".")
+        -- (another cartridge while linked: the other player's game is still the one it linked with, so the link goes)
+        unlink(family() and ("The cartridge changed, so the link with %s was closed."):format(short(s.partner))
+            or "This game cannot use the link. It works with " .. GAMES_TEXT .. ".", true)
         return
     end
     s.ghost = cableFor(machine).Attach(machine, {
@@ -834,7 +863,7 @@ local function sayBye(text, route)
     end)
     byeFrame:Show()
 end
-local function unlink(why, tell)
+function unlink(why, tell)
     local s = session
     if not s then return end
     session = nil
@@ -843,10 +872,13 @@ local function unlink(why, tell)
     if s.state == "linked" then record(s, "ended: " .. tostring(why)) end
     if tell then sayBye("LX" .. string.char(s.id), s.route or false) end
     if why then Print(why) end
+    if MB.Trade3 and MB.Trade3.LinkEnded then pcall(MB.Trade3.LinkEnded) end
 end
 
 local function linked(partner, id, host, fam, peer, route)
     session = { id = id, host = host, state = "linked", partner = partner, family = fam, peer = peer or fam, epoch = 0, since = clockNow(), route = route }
+    friendsSay("Linked", partner, fam, peer or fam)
+    if MB.Trade3 and MB.Trade3.Linked then pcall(MB.Trade3.Linked, partner) end
     local s = session
     s.wire = MB.Wire.New({
         id = host and id or (id + 125), peer = host and (id + 125) or id, room = 254, now = clockNow, lanes = LANES,
@@ -862,7 +894,7 @@ local function linked(partner, id, host, fam, peer, route)
     ticker:Show()
     local mixed = (session.peer ~= fam)
     if route then record(s, "over whispers to " .. tostring(route.target)) end
-    if fam == "native" then
+    if isNative(fam) then
         Print(("Linked with %s. Your games can see each other now%s."):format(short(partner), host and " (you lead)" or ""))
     elseif fam == "gen3" then
         if host then
@@ -881,7 +913,7 @@ local function linked(partner, id, host, fam, peer, route)
         Print(("Linked with %s%s. They lead: stand in a Pokemon Center until told their link is open."):format(short(partner),
             mixed and (fam == "gen2" and ", who is playing an older game (use your Time Capsule)" or ", who is playing a newer game (you will meet through its Time Capsule)") or ""))
     end
-    if fam ~= "native" and MB.Alpha() then
+    if not isNative(fam) and MB.Alpha() then
         -- (the trade animation and a battle's moves are the games' own, and long: fast-forward is safe while linked)
         Print(("If a trade or battle feels slow, hold %s to fast-forward. The two games stay in step; the other player can do the same."):format(MB.KeyLabel and MB.KeyLabel("ff") or "Tab"))
     end
@@ -1101,6 +1133,7 @@ local function heardWhisper(text, sender)
         if not heardW[key] and n >= 20 then return end                   -- (no more than 20 callers at once)
         local tell = clockNow() - (toldInvite[key] or -100) > 30          -- (one notice per caller every 30 s at most)
         heardW[key] = { id = id, k = k, sender = sender, family = fam, at = clockNow() }
+        friendsSay("Invited", sender, fam, "whisper", id)
         if tell then
             toldInvite[key] = clockNow()
             Print(("%s wants to link MekkaBoys with you (no party needed). Start your game and type /mb link %s to answer."):format(short(sender), short(sender)))
@@ -1113,7 +1146,7 @@ local function heardWhisper(text, sender)
             local target = s.candidates[k]
             if not target then return end
             if not fits(fam, s.family) then
-                Print(("%s answered, but is playing a game that cannot link with yours."):format(short(sender)))
+                Print(("%s answered, but %s."):format(short(sender), whyNot(fam, s.family)))
                 return
             end
             local mine = s.family
@@ -1227,10 +1260,11 @@ function Link.Heard(text, channel, sender)
             Print(("%s wants to link MekkaBoys. Start your game and type /mb link to join."):format(short(sender)))
         end
         heard = { id = id, sender = sender, family = fam, at = clockNow() }
+        friendsSay("Invited", sender, fam, "party", id)
     elseif kind == "LA" then
         if s and s.state == "inviting" and id == s.id then
             if not fits(fam, s.family) then
-                Print(("%s answered, but is playing a game that cannot link with yours."):format(short(sender)))
+                Print(("%s answered, but %s."):format(short(sender), whyNot(fam, s.family)))
                 return
             end
             local mine = s.family
@@ -1331,7 +1365,7 @@ function Link.Open(who)
         if not fam then return end
         heardW[plain(h.sender)] = nil
         if not fits(h.family, fam) then
-            Print(("%s is playing a game that cannot link with yours."):format(short(h.sender)))
+            Print(("%s %s."):format(short(h.sender), whyNot(h.family, fam)))
             return
         end
         answer(h, fam)
@@ -1374,7 +1408,7 @@ function Link.Open(who)
         local h = heard
         heard = nil
         if not fits(h.family, fam) then
-            Print(("%s is playing a game that cannot link with yours."):format(short(h.sender)))
+            Print(("%s %s."):format(short(h.sender), whyNot(h.family, fam)))
             return
         end
         raw("LA" .. string.char(h.id) .. fam)

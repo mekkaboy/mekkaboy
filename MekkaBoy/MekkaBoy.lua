@@ -7,11 +7,11 @@ local addonName, MB = ...
 -- two MekkaBoys tell each other both when they share a group (Hello.lua).
 -- PROTOCOL only changes when the link's messages change in a way an older
 -- copy could not follow; that, not the version, is what stops two from linking.
-MB.VERSION = "0.20.1-beta"
+MB.VERSION = "0.21.0-beta"
 MB.PROTOCOL = 1
 -- "stable" (the Release on CurseForge) or "alpha" (the testers' build, and this source tree): a stable build leaves out
 -- what has not been proven with real players yet (dev/make_release.py --channel sets it; see MB.Alpha's callers)
-MB.CHANNEL = "stable"
+MB.CHANNEL = "alpha"
 function MB.Alpha() return MB.CHANNEL ~= "stable" end
 
 -- Saved settings. Always fetched through DB(): the game replaces the global
@@ -32,6 +32,9 @@ MB.DB = DB
 -- separate set of practice saves that never touches yours. Returns a table with .gb, .states, .gba.
 function MB.Saves()
     local db = DB()
+    -- (a build without the practice saves, after a QA kit that had them: back to your own saves, since there is no
+    -- /mb testsave here to switch them off)
+    if db.testSaves and not MB.TestSaves then db.testSaves = nil end
     if db.testSaves then
         db.test = db.test or {}
         local t = db.test
@@ -40,6 +43,19 @@ function MB.Saves()
     end
     db.gba = db.gba or {}
     return db
+end
+
+-- Each game's battery save counts how many times it has been kept. A resume point remembers the count it was made at,
+-- and is used only while the save is still that one: a save kept later (with resume turned off, say) is newer
+-- progress than the resume point, so the save wins. (Resume points from before 0.20.2 carry no count and load as before.)
+function MB.BatteryRev(key)
+    local s = MB.Saves()
+    return s.rev and s.rev[key] or 0
+end
+function MB.BatteryKept(key)
+    local s = MB.Saves()
+    s.rev = s.rev or {}
+    s.rev[key] = (s.rev[key] or 0) + 1
 end
 
 -- ---- our own games: the realm's clock, and one save per character ----
@@ -174,10 +190,39 @@ function MB.Opt(name, default)
     return v
 end
 
+-- How I play: one setting for everything MekkaBoy tells other players (the friends list, Friends.lua; Together
+-- Mode, GBA/Ghosts.lua).
+--   open     anyone who targets you (or shares your group or guild) sees that you have MekkaBoy and what you play;
+--            Together shares with the friends you add (and, once it ships, with the realm)
+--   friends  only people you know: your group, friends list, guild and past link partners; Together with added friends
+--   solo     nobody is told and nobody is asked; Together is off
+-- (0.20.3 test builds kept this as opt.presence = everyone / known / off: read as open / friends / solo)
+local PLAY_FROM_PRESENCE = { everyone = "open", known = "friends", off = "solo" }
+function MB.PlayMode()
+    local o = MB.DB().opt
+    local v = o.play
+    if v == "open" or v == "friends" or v == "solo" then return v end
+    return PLAY_FROM_PRESENCE[o.presence] or "open"
+end
+function MB.SetPlayMode(v)
+    if v ~= "open" and v ~= "friends" and v ~= "solo" then return false end
+    local o = MB.DB().opt
+    o.play, o.presence = v, nil
+    if MB.Friends and MB.Friends.Changed then pcall(MB.Friends.Changed) end
+    if MB.Ghosts and MB.Ghosts.PlayModeChanged then pcall(MB.Ghosts.PlayModeChanged) end
+    return true
+end
+MB.PLAY_WORDS = { open = "Open", friends = "Friends only", solo = "Solo" }
+MB.PLAY_LINES = {
+    open = "Open: anyone who targets you, and your group and guild, can see that you have MekkaBoy and what you are playing.",
+    friends = "Friends only: just your group, friends list, guild and the players you have linked with can see that you have MekkaBoy.",
+    solo = "Solo: nobody is told that you have MekkaBoy, nobody is asked, and Together is off.",
+}
+
 -- Where the Workshop page lives: the page that turns a game you own into a
 -- code to paste (/mb setup shows this address). "" = point at the copy of
 -- the page that ships in this folder, Workshop.html.
-MB.WORKSHOP_URL = "https://workshop.mekkaboy.com"
+MB.WORKSHOP_URL = ""
 
 local PREFIX = "|cffe6b450MekkaBoy:|r "
 function MB.Print(msg) print(PREFIX .. msg) end

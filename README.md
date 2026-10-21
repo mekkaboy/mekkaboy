@@ -1,6 +1,6 @@
 # MekkaBoy (beta)
 
-Current version: 0.20.1 beta.
+Current version: 0.21.0 beta.
 
 A Game Boy, Game Boy Color and Game Boy Advance emulator addon for WoW Forever.
 Website: https://mekkaboy.com · Download: https://www.curseforge.com/wow/addons/mekkaboy
@@ -69,7 +69,12 @@ changing.
   pause the game and say why on its screen: a ready check, a queue that pops,
   a summon, a resurrect offer, a group invite, a duel, a trade window, and
   your flight landing. Each can be switched off in the settings.
-- The console comes in six colorways: Gunmetal, Midnight, Arcane, Verdant,
+- Two looks: **Minimal**, a see-through window with the controls on a slim
+  bar (played on the keyboard), and **Console**, the MekkaBoy handheld with
+  every button clickable (`/mb look minimal|console`, or the Look slider in
+  the settings). The first time you open MekkaBoy it asks how you want to play
+  and which look you want; `/mb welcome` asks again.
+- Both looks come in six colorways: Gunmetal, Midnight, Arcane, Verdant,
   Ivory and Rose Gold (`/mb color <name>`, or the Color slider in the
   settings).
 
@@ -159,11 +164,53 @@ finishing on its own, so a trade can't complete on one side only. If they are
 gone for a minute, the link closes; type `/mb reset` if your game then shows a
 communication error.
 
+**Trading where you stand** (Pokémon Emerald, FireRed 1.0, LeafGreen 1.1).
+Once linked, either player types `/mb trade`. Your game is saved and held
+still, the other player gets a pop-up, and if they say yes both games open
+their own trade screen right there, with no Pokémon Center. Afterwards you are
+back on the square you stood on. It is refused in places a trade's save could
+leave you stuck (elevators, secret bases, the Safari Zone, the Battle Frontier,
+on the water). Between Emerald and FireRed/LeafGreen the games' own rule
+applies: Champion in Emerald, the Sevii Islands finished in FireRed/LeafGreen.
+`/mb trade off` calls it off before the trade screen opens.
+
+**Battling where you stand** works the same way: `/mb battle`. Your Pokémon
+are healed for the battle and come back exactly as they were (no free heal),
+your bag is untouched, and the win or loss goes in each game's link battle
+record. As in the Colosseum, each game saves before the battle and again
+after it. Single battles only.
+
+**If the link drops while a trade saves** (Emerald, FireRed, LeafGreen): the
+two games save a trade a moment apart, so a client closing in that moment
+could leave it kept on one side only. MekkaBoy keeps your save from just
+before the trade until both games are known to have kept it. If they didn't,
+the player whose game kept it is offered to undo it on their side; nothing
+changes unless they press Undo. `/mb trades` lists any trade still being
+checked.
+
+## Team card and Pokédex
+
+Target a player who has MekkaBoy and click the MekkaBoy mark above their
+portrait: their **team card** shows the trainer and game they are on (playing
+now, or when they last played), their party and levels, badges, how many
+Pokémon they have caught across all their saves, and their link battle record.
+**Link** on the card asks them to link; **Their Pokédex** shows their National
+Pokédex (caught out of 386), their Living Pokédex (in a party or PC box right
+now), Kanto / Johto / Hoenn, and each save. `/mb card` and `/mb dex` show your
+own; the friends list has a My Pokédex button.
+
+Who can see yours follows How I play: Open, anyone; Friends only, the people
+you know; Solo, nobody. Pictures come from your own Ruby, Sapphire, Emerald,
+FireRed or LeafGreen once you have opened it; otherwise a dashed square.
+Pokémon in Red, Blue, Yellow and the Advance games' saves are counted in full
+once you have opened that game in this version.
+
 ## Together Mode (experimental)
 
 In the Pokémon games, `/mb together <name>` lets you and a friend see each
 other's trainer walking in your own copies of the game (they add you too).
-Walk up to theirs and the game tells you how to link. `/mb together why` says
+Walk up to theirs and press A: in Emerald, FireRed and LeafGreen you are offered
+a trade or a battle right there; in the other games, the chat says how to link. `/mb together why` says
 what is happening, `/mb together off` stops it.
 
 ## Limits

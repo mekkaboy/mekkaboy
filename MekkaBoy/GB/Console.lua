@@ -121,6 +121,8 @@ local grids = {}                     -- one screenful of dots for each kind of m
 local grid                           -- the one in use: { holder, rows, tex, shown, RC, GC, BC }
 local keymap = {}                    -- key name -> button
 local held = {}                      -- buttons currently held
+local holders = {}                   -- button -> the inputs holding it down (each key, the on-screen pad...): it is let go
+                                     -- only when the last of them is (Up and W both held, Up let go: still Up)
 -- A key let go while the keyboard is with something else (a chat line, a window of the game client that came up
 -- by itself, another program) is never reported to an addon: its button would stay down and the hero walk on
 -- by himself. So the keys held are checked against the keyboard itself on every frame (for each key the client
@@ -139,6 +141,9 @@ local costDrawn, costBlind, costPaint, blindSeen = 4, 2, 1, false     -- running
 local scanAll = true                 -- the next picture must check every line, not only those the game redrew
 local setColor                      -- the textures' SetVertexColor, fetched once
 local statFrames, statTime = 0, 0
+-- /mb profile: a run of one-second samples of where the time goes (prof = nil when not recording)
+local prof
+local dotsSet, turnMaxSec, gcPrev = 0, 0, nil
 local frameNo = 0
 local broken = false
 local history, lastSnap = {}, nil    -- rewind snapshots, oldest first
@@ -154,6 +159,7 @@ function MB.IsRunning() return running end
 function MB.Machine() return machine end       -- the running game, for the link and for tools
 -- the cartridge in the slot (its id), its system and whether it is playing: for /mb bug
 function MB.CurrentCart() return saveKey, sys and sys.kind, running and true or false end
+function MB.CurrentStore() return storeKey or saveKey end      -- where the running game's battery save is kept
 
 -- the system the cartridge in the slot needs
 local function slotSys()
@@ -362,22 +368,37 @@ local function present()
         if gok then over, overLines = o, l else MB.Ghosts.Fail(o) end
         placeLabels(g, MB.Ghosts.labels)
     end
-    local i = 0
+    local i, n = 0, 0
     for y = 1, H do
         local ol = overLines and overLines[y]
         if all or (dirty and dirty[y]) or ol then
             if dirty then dirty[y] = false end
-            for k = i + 1, i + W do
-                local c = (ol and over[k]) or fb[k]
-                if c ~= shown[k] then
-                    shown[k] = c
-                    local r = RC[c] or colorOf(c, RC, GC, BC)
-                    set(tex[k], r, GC[c], BC[c])
+            if ol then
+                for k = i + 1, i + W do
+                    local c = over[k] or fb[k]
+                    if c ~= shown[k] then
+                        shown[k] = c
+                        n = n + 1
+                        local r = RC[c] or colorOf(c, RC, GC, BC)
+                        set(tex[k], r, GC[c], BC[c])
+                    end
+                end
+            else
+                -- (the common case, kept as short as it will go: this runs for every dot of every line redrawn)
+                for k = i + 1, i + W do
+                    local c = fb[k]
+                    if c ~= shown[k] then
+                        shown[k] = c
+                        n = n + 1
+                        local r = RC[c] or colorOf(c, RC, GC, BC)
+                        set(tex[k], r, GC[c], BC[c])
+                    end
                 end
             end
         end
         i = i + W
     end
+    dotsSet = dotsSet + n
 end
 
 local function redrawAll()
@@ -428,7 +449,7 @@ local function pause()
     running = false
     for button in pairs(held) do MB.SetPressed(button, false) end
     for button in pairs(PAD) do MB.SetPressed(button, false) end
-    held = {}
+    held, holders = {}, {}
     for key in pairs(keysDown) do keysDown[key] = nil end
     if machine then sys.release(machine) end
     waiting = false
@@ -494,7 +515,7 @@ end
 
 -- (a system's "keep" hands the game's own save to the settings)
 function GBSYS.keep(m, key)
-    if m.hasBattery then MB.Saves().gb[key] = m.getSave() end
+    if m.hasBattery then MB.Saves().gb[key] = m.getSave() MB.BatteryKept(key) end
 end
 
 -- Create the machine. fresh = true ignores the "resume where I left off" state.
@@ -537,13 +558,22 @@ local function start(fresh)
     applyPalette()
     applyCheats()
     if sys.states and not fresh and MB.Opt("resume", true) then
-        local st = gameStates().resume
+        local states = gameStates()
+        local st = states.resume
+        if st and states.resumeRev and states.resumeRev ~= MB.BatteryRev(storeKey) then
+            -- the battery save was kept after this resume point was made: it is the newer progress
+            states.resume, states.resumeRev, st = nil, nil, nil
+            Print("Your game's own save is newer than the resume point, so it starts from the save.")
+        end
         if st then
-            local ok2, good = pcall(function() return machine.loadState(sys.unpack(st)) end)
+            local ok2, good, why = pcall(function() return machine.loadState(sys.unpack(st)) end)
             if ok2 and good then
                 if sys.loaded then sys.loaded(machine) end
                 word = nil          -- (it carries on from where it was: no need to say which save is in)
-            else gameStates().resume = nil end
+            else
+                states.resume, states.resumeRev = nil, nil
+                if ok2 and why then Print("The resume point was not used (" .. tostring(why) .. "); the game starts from its save.") end
+            end
         end
     end
     if sys.kind == "native" then
@@ -563,14 +593,43 @@ end
 function MB.SaveGame()
     if not (machine and saveKey) then return end
     sys.keep(machine, storeKey or saveKey, true)
-    if sys.states and MB.Opt("resume", true) then
+    if not sys.states then return end
+    local states = gameStates()
+    if MB.Opt("resume", true) then
         local ok, st = pcall(function() return sys.pack(machine.saveState()) end)
-        if ok then gameStates().resume = st end
+        if ok then states.resume, states.resumeRev = st, MB.BatteryRev(storeKey or saveKey)
+        else states.resume, states.resumeRev = nil, nil end         -- (an old one would be older than the save just kept)
+    elseif states.resume then
+        states.resume, states.resumeRev = nil, nil                  -- resume is off: the save just kept is the newest progress
     end
 end
 
+-- Put a battery save back (a trade undone on this side, GBA/Trade3.lua) and restart the game from it. Only for the
+-- game running now; the resume point goes too, since it is from after the trade.
+function MB.RestoreBattery(store, save)
+    if not (machine and sys.kind == "gba" and (storeKey or saveKey) == store and type(save) == "table" and save.sectors) then return false end
+    pause()
+    machine = nil
+    MB.Sound.Stop()
+    MB.Sound.Attach(nil)
+    if MB.Link and MB.Link.MachineChanged then MB.Link.MachineChanged(nil) end
+    if MB.Ghosts then MB.Ghosts.MachineChanged(nil) end
+    MB.Saves().gba[store] = { kind = save.kind or "flash128", sectors = save.sectors, at = (date and date("%Y-%m-%d %H:%M") or "?") .. " (before an undone trade)" }
+    MB.BatteryKept(store)
+    local states = gameStates()
+    states.resume, states.resumeRev = nil, nil
+    history, lastSnap = {}, nil
+    broken = false
+    if start(true) then
+        pcall(machine.runFrame, true)
+        present()
+        MB.SetScreenMessage(gameName() .. " restarted from before the trade\nClick the screen to play")
+    end
+    return true
+end
+
 -- true while two games are in a link session: no going back in time then
-local function linkBusy() return MB.Link and MB.Link.Busy and MB.Link.Busy() end
+local function linkBusy() return (MB.Link and MB.Link.Busy and MB.Link.Busy()) or (MB.Trade3 and MB.Trade3.Busy()) end
 local function linkBlocks(button) return MB.Link and MB.Link.BlocksKey and MB.Link.BlocksKey(button) end
 
 -- A game can ask the console not to rewind it mid-action (MekkaBoy's own games set a hint while a hand/turn is live, so
@@ -660,8 +719,8 @@ end
 -- one emulated frame, with everything that rides along with it
 local function step(render)
     frameNo = frameNo + 1
-    if held.turboa and not linkBlocks("a") then machine.setKey("a", frameNo % 4 < 2) end
-    if held.turbob and not linkBlocks("b") then machine.setKey("b", frameNo % 4 < 2) end
+    if held.turboa and not holders.a and not linkBlocks("a") then machine.setKey("a", frameNo % 4 < 2) end   -- (A held as well: held)
+    if held.turbob and not holders.b and not linkBlocks("b") then machine.setKey("b", frameNo % 4 < 2) end
     for i = 1, #pokes do machine.poke(pokes[i].addr, pokes[i].value) end
     local ok, err = pcall(machine.runFrame, render)
     if not ok then crashed(err) return false end
@@ -669,6 +728,10 @@ local function step(render)
     if ghosts then
         local gok, gerr = pcall(ghosts.Frame, machine, render)
         if not gok then ghosts.Fail(gerr) end
+    end
+    if MB.Trade3 and sys.kind == "gba" then      -- (Gen 3 trades: where you stand, and each trade's save watched)
+        local tok, terr = pcall(MB.Trade3.Frame, machine)
+        if not tok then Print("Trade: " .. tostring(terr)) pcall(MB.Trade3.Fail) end
     end
     if sys.rewind and frameNo % REWIND_EVERY == 0 and MB.Opt("rewind", true) and not linkBusy() then
         lastSnap = machine.saveState(lastSnap)
@@ -828,7 +891,7 @@ switchOn = function()
 end
 MB.OnScreenClick = switchOn
 
-local function setHeld(button, down)
+local function applyHeld(button, down)
     if PAD[button] then
         -- (while linked, the player who leads picks the room: the other's A and B wait)
         if down and linkBlocks(button) then return end
@@ -840,17 +903,32 @@ local function setHeld(button, down)
         held[button] = true
     else
         held[button] = nil
-        if machine and button == "turboa" then machine.setKey("a", false) end
-        if machine and button == "turbob" then machine.setKey("b", false) end
+        if machine and button == "turboa" and not holders.a then machine.setKey("a", false) end   -- (an A held some other way stays)
+        if machine and button == "turbob" and not holders.b then machine.setKey("b", false) end
     end
 end
+-- one input (src: "key:W", "pad", ...) presses or lets go of a button
+local function setHeld(button, down, src)
+    src = src or "pad"
+    local h = holders[button]
+    if down then
+        if not h then h = {} holders[button] = h end
+        h[src] = true
+        applyHeld(button, true)
+        return true
+    end
+    if h then h[src] = nil if next(h) then return false end end   -- (another input still holds it)
+    holders[button] = nil
+    applyHeld(button, false)
+    return true
+end
+local function shown(button) return button == "turboa" and "a" or button == "turbob" and "b" or button end
 
 local function keyLetGo(key)
     local button = keysDown[key]
     if not button then return end
     keysDown[key] = nil
-    setHeld(button, false)
-    MB.SetPressed(button == "turboa" and "a" or button == "turbob" and "b" or button, false)
+    if setHeld(button, false, "key:" .. key) then MB.SetPressed(shown(button), false) end
 end
 local function checkKeys()
     if not next(keysDown) then return end
@@ -873,7 +951,7 @@ end
 -- the on-screen buttons
 function MB.OnPad(button, down)
     if playing() then
-        setHeld(button, down)
+        setHeld(button, down, "pad")
     elseif down and not InCombatLockdown() then
         if picking then pickerButton(button)
         elseif button == "start" then switchOn()
@@ -881,7 +959,7 @@ function MB.OnPad(button, down)
     end
 end
 function MB.OnAction(button, down)
-    if playing() then setHeld(button, down) end
+    if playing() then setHeld(button, down, "action") end
 end
 -- the volume wheel (and its keys): one notch louder or quieter
 function MB.VolumeText()
@@ -934,8 +1012,8 @@ keyCapture:SetScript("OnKeyDown", function(self, key)
         elseif button == "select" then openPicker() end
         return
     end
-    setHeld(button, true)
-    MB.SetPressed(button == "turboa" and "a" or button == "turbob" and "b" or button, true)
+    setHeld(button, true, "key:" .. key)
+    MB.SetPressed(shown(button), true)
     keysDown[key] = button
     if keyIsDown and keyTrusted[key] == nil then
         local ok, down = pcall(keyIsDown, key)
@@ -944,11 +1022,10 @@ keyCapture:SetScript("OnKeyDown", function(self, key)
 end)
 
 keyCapture:SetScript("OnKeyUp", function(_, key)
+    local button = keysDown[key] or keymap[key]         -- (the button it pressed, even if the keys were changed since)
     keysDown[key] = nil
-    local button = keymap[key]
     if not button or not running then return end
-    setHeld(button, false)
-    MB.SetPressed(button == "turboa" and "a" or button == "turbob" and "b" or button, false)
+    if setHeld(button, false, "key:" .. key) then MB.SetPressed(shown(button), false) end
 end)
 
 -- ---------------------------------------------------------- main loop ---
@@ -997,6 +1074,13 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
     -- linked, and waiting for the other player's game to answer: the game is held still, so that
     -- its own short patience for that answer does not run out (see GBA/Cable.lua)
     local hold = (MB.Link and MB.Link.Waiting and MB.Link.Waiting()) and true or false
+    -- (a trade where you stand is being set up: the game is saved, a little each tick, and held still: GBA/Trade3.lua)
+    local trade = MB.Trade3
+    if trade and trade.Holding() then
+        hold = true
+        local tok, terr = pcall(trade.Tick, machine)
+        if not tok then Print("The trade could not be set up: " .. tostring(terr)) pcall(trade.Fail) end
+    end
     if hold then owed = 0 end
     if hold ~= waiting then
         waiting = hold
@@ -1041,6 +1125,7 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
         watch.turns[b] = watch.turns[b] + 1
         if ran > watch.longest then watch.longest = ran end
         if ran > watch.sinceWarning then watch.sinceWarning = ran end
+        if ran > turnMaxSec then turnMaxSec = ran end
     end
 
     statTime = statTime + elapsed
@@ -1050,6 +1135,18 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
             sys.second(machine, storeKey or saveKey, { speed = statFrames / statTime / FPS * 100, pictures = secShown / statTime, every = pictureEvery,
                                            game = costDrawn, blind = costBlind, paint = costPaint }, flash)
         end
+        if prof then
+            local gc = collectgarbage("count")
+            prof.samples[#prof.samples + 1] = {
+                speed = statFrames / statTime / FPS * 100, pictures = secShown / statTime, every = pictureEvery,
+                emulate = costBlind, draw = math.max(0, costDrawn - costBlind), paint = costPaint,
+                dots = secShown > 0 and dotsSet / secShown or 0, garbageKB = gcPrev and math.max(0, gc - gcPrev) or 0,
+                wowFps = GetFramerate and GetFramerate() or 0, turnMax = turnMaxSec, ff = ff and true or false,
+            }
+            gcPrev = gc
+            if GetTime() >= prof.untilT then MB.ProfileFinish() end
+        end
+        dotsSet, turnMaxSec = 0, 0
         statFrames, statTime, secShown = 0, 0, 0
         -- say nothing while all is well; speak up when fast-forwarding or struggling
         if ff then speedText = (" - %d%% speed"):format(pct)
@@ -1084,6 +1181,58 @@ end
 
 -- what each dot of the screen shows now (for tests: the game's picture with anything drawn over it)
 function MB.ShownDots() return grid and grid.shown end
+
+-- /mb profile: what a played stretch of a game cost, second by second, kept in the settings (MekkaBoyDB.profiles, the
+-- last 12) so it can be read after logging out. emulate = a frame run without a picture, draw = what drawing the
+-- picture adds, paint = putting the changed dots on WoW's screen (dots = how many changed per picture).
+local function profileSummary(p)
+    local keys = { "speed", "pictures", "emulate", "draw", "paint", "dots", "garbageKB", "wowFps", "turnMax" }
+    local out = {}
+    for _, k in ipairs(keys) do
+        local v = {}
+        for _, smp in ipairs(p.samples) do if not smp.ff then v[#v + 1] = smp[k] end end
+        table.sort(v)
+        if #v > 0 then
+            local sum = 0 for _, x in ipairs(v) do sum = sum + x end
+            out[k] = { avg = sum / #v, median = v[math.floor((#v + 1) / 2)], worst = (k == "speed" or k == "wowFps") and v[1] or v[#v] }
+        end
+    end
+    return out
+end
+function MB.ProfileFinish()
+    local p = prof
+    if not p then return end
+    prof = nil
+    p.summary = profileSummary(p)
+    p.seconds = #p.samples
+    local db = MB.DB()
+    db.profiles = db.profiles or {}
+    table.insert(db.profiles, p)
+    while #db.profiles > 12 do table.remove(db.profiles, 1) end
+    local s = p.summary
+    if not s.speed then Print("Profile \"" .. p.label .. "\": no time recorded while the game was running.") return end
+    Print(("Profile \"%s\" (%s, %d s): speed %d%% (worst %d%%), %.0f pictures a second, WoW %d fps (worst %d)."):format(p.label, p.game or "?",
+        p.seconds, s.speed.avg + 0.5, s.speed.worst + 0.5, s.pictures.avg, s.wowFps.avg + 0.5, s.wowFps.worst + 0.5))
+    Print(("  per frame: emulate %.1f ms, draw %.1f ms; per picture: paint %.1f ms for %d changed dots; garbage %d KB a second; longest turn %d ms.")
+        :format(s.emulate.avg, s.draw.avg, s.paint.avg, s.dots.avg + 0.5, s.garbageKB.avg + 0.5, s.turnMax.worst + 0.5))
+    Print("  Kept with your settings: it reaches us when you log out or /reload.")
+end
+MB.AddCommand("profile", "profile [seconds] [label] | profile stop - measure where the game's time goes while you play (for speed work)", function(rest)
+    rest = rest or ""
+    if rest == "stop" then
+        if prof then MB.ProfileFinish() else Print("No profile is running.") end
+        return
+    end
+    if not (machine and sys and sys.kind ~= "native") then Print("Put a Game Boy or Advance game in and switch it on first.") return end
+    local secs, label = rest:match("^(%d+)%s*(.*)$")
+    secs = tonumber(secs) or 30
+    if secs < 5 then secs = 5 elseif secs > 300 then secs = 300 end
+    label = (label and label ~= "" and label) or (rest:match("^%D.*") ) or gameName()
+    prof = { label = label, game = saveKey, name = gameName(), system = sys.kind, version = MB.VERSION, at = date and date("%Y-%m-%d %H:%M") or "?",
+             scale = MB.Opt("scale", 0), pictureOpt = MB.Opt(sys.pictureOpt, 0), untilT = GetTime() + secs, samples = {} }
+    gcPrev = collectgarbage("count")
+    Print(("Profiling %s for %d s. Play as you normally would (walking around a town is a good test); /mb profile stop ends it early."):format(label, secs))
+end)
 
 -- for the speed test and for anyone curious: what a frame is costing right now
 function MB.Perf()

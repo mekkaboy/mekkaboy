@@ -60,6 +60,7 @@ function MB.SetColorway(name)
     if not (name and MB.ColorwayNames[name]) then return false end
     MB.DB().opt.colorway = name
     body:SetTexture(ART .. "body_" .. name .. ".tga")
+    if MB.PaintGlass then MB.PaintGlass() end
     return true
 end
 function MB.Colorway() return colorway() end
@@ -135,7 +136,8 @@ local lamp = glow(Lay.led[1], Lay.led[2], 30, 1, 0.25, 0.2)
 local powered = false
 function MB.SetPower(on)
     powered = on and true or false
-    lamp:SetShown(powered)
+    lamp:SetShown(powered and not (MB.Look and MB.Look() == "glass"))
+    if MB.PaintGlass then MB.PaintGlass() end
 end
 
 -- ------------------------------------------------------------- gauge ---
@@ -185,6 +187,7 @@ function MB.SetVolumeKnob(fraction)
     if type(fraction) ~= "number" then fraction = 0.5 end
     if fraction < 0 then fraction = 0 elseif fraction > 1 then fraction = 1 end
     knob:SetRotation(-rad(-135 + fraction * 270))
+    if MB.glassButtons then MB.glassButtons.volume.label:SetText(("Vol %d%%"):format(math.floor(fraction * 100 + 0.5))) end
 end
 MB.SetVolumeKnob(0.5)
 
@@ -231,6 +234,14 @@ local function hot(name, cx, cy, w, h, glowSize, r, g, b)
 end
 
 function MB.SetPressed(name, down)
+    if MB.Look and MB.Look() == "glass" then
+        local b = MB.glassButtons and MB.glassFace and MB.glassFace(name)
+        if b and MB.PaintGlass then
+            MB.PaintGlass()
+            if down then b.face:SetColorTexture(1, 1, 1, 0.28) end
+        end
+        return
+    end
     local t = pressGlow[name]
     if t then t:SetShown(down and true or false) end
 end
@@ -330,6 +341,192 @@ do
     btn:SetScript("OnMouseWheel", function(_, delta) turn(delta > 0 and 1 or -1) end)
 end
 
+-- -------------------------------------------------- the minimal look ---
+-- Two looks for the same window (/mb look, the settings, the first-open questions in UI/Onboarding.lua):
+--   glass    (what a new player starts with) a see-through panel the color of the colorway: the picture, a thin top
+--            line (the game, the link, help and close) and a bar under the picture (memory valves, rewind, fast-
+--            forward, volume, the flight). The game is played on the keyboard; the bar dims while the mouse is away.
+--   console  the MekkaBoy handheld above, every button clickable.
+-- Same screen, same size of picture, same everything else: only what is drawn around it changes.
+local G_PAD, G_TOP, G_BAR = 10, 28, 30
+local glassW, glassH = scr[3] + G_PAD * 2, G_TOP + scr[4] + 8 + G_BAR + 6
+-- each colorway as glass: the panel's color, text, quieter text, the accent, the edge
+local GLASS = {
+    gunmetal = { bg = { 0.10, 0.11, 0.13 }, ink = { 0.91, 0.93, 0.94 }, soft = { 0.66, 0.71, 0.73 }, accent = { 0.56, 0.76, 0.82 }, edge = { 1, 1, 1, 0.16 } },
+    midnight = { bg = { 0.07, 0.09, 0.19 }, ink = { 0.90, 0.92, 1.00 }, soft = { 0.65, 0.69, 0.88 }, accent = { 0.56, 0.64, 1.00 }, edge = { 0.67, 0.73, 1, 0.22 } },
+    arcane   = { bg = { 0.14, 0.09, 0.23 }, ink = { 0.94, 0.91, 1.00 }, soft = { 0.75, 0.68, 0.90 }, accent = { 0.76, 0.61, 0.96 }, edge = { 0.78, 0.67, 1, 0.22 } },
+    verdant  = { bg = { 0.07, 0.16, 0.10 }, ink = { 0.90, 0.96, 0.91 }, soft = { 0.65, 0.79, 0.69 }, accent = { 0.50, 0.82, 0.60 }, edge = { 0.59, 0.90, 0.67, 0.20 } },
+    ivory    = { bg = { 0.94, 0.92, 0.88 }, ink = { 0.16, 0.15, 0.13 }, soft = { 0.37, 0.34, 0.29 }, accent = { 0.54, 0.42, 0.20 }, edge = { 0.24, 0.20, 0.12, 0.22 } },
+    rosegold = { bg = { 0.23, 0.13, 0.13 }, ink = { 0.98, 0.91, 0.89 }, soft = { 0.88, 0.73, 0.69 }, accent = { 0.92, 0.66, 0.58 }, edge = { 0.94, 0.71, 0.65, 0.24 } },
+}
+local pane = CreateFrame("Frame", nil, win)
+pane:SetAllPoints(win)
+pane:SetFrameLevel(win:GetFrameLevel())
+pane:Hide()
+local paneBg = pane:CreateTexture(nil, "BACKGROUND")
+paneBg:SetAllPoints(pane)
+local edges = {}
+for i, e in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true }, { "TOPLEFT", "BOTTOMLEFT" }, { "TOPRIGHT", "BOTTOMRIGHT" } }) do
+    local t = pane:CreateTexture(nil, "BORDER")
+    t:SetPoint(e[1], 0, 0) t:SetPoint(e[2], 0, 0)
+    if e[3] then t:SetHeight(1) else t:SetWidth(1) end
+    edges[i] = t
+end
+local dot = pane:CreateTexture(nil, "ARTWORK")
+dot:SetSize(8, 8)
+dot:SetPoint("LEFT", pane, "TOPLEFT", G_PAD + 2, -G_TOP / 2)
+local bar = CreateFrame("Frame", nil, pane)
+bar:SetPoint("TOPLEFT", pane, "TOPLEFT", G_PAD, -(G_TOP + scr[4] + 8))
+bar:SetSize(scr[3], G_BAR)
+local glassButtons, glassFaces = {}, {}
+local function glassButton(parent, label, w, name)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(w, 24)
+    b:RegisterForClicks("AnyUp")
+    local face = b:CreateTexture(nil, "BACKGROUND")
+    face:SetAllPoints(b)
+    b.face = face
+    local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetPoint("CENTER")
+    fs:SetText(label)
+    b.label = fs
+    b:SetScript("OnEnter", nil)
+    glassButtons[#glassButtons + 1] = b
+    if name then glassFaces[name] = b end
+    return b
+end
+local mems = {}
+for n = 1, 4 do
+    local b = glassButton(bar, tostring(n), 26, "mem" .. n)
+    b:SetPoint("LEFT", bar, "LEFT", (n - 1) * 30, 0)
+    tip(b, function() return "Memory valve " .. n end, function()
+        local when = MB.StateInfo and MB.StateInfo(n)
+        return (when and ("Holds a save from " .. when .. ".") or "Empty.") .. "\nLeft-click: load.  Right-click: save."
+    end)
+    b:SetScript("OnClick", function(_, mouseButton) if MB.OnMemory then MB.OnMemory(n, mouseButton == "RightButton") end end)
+    mems[n] = b
+end
+local gRew = glassButton(bar, "<<", 34, "rewind")
+gRew:SetPoint("LEFT", bar, "LEFT", 4 * 30 + 12, 0)
+tip(gRew, "Rewind", function() return "Hold to run the last moments backwards.\n" .. (keyOf("rewind") or "") end)
+holdable(gRew, "rewind", "OnAction")
+local gFF = glassButton(bar, ">>", 34, "ff")
+gFF:SetPoint("LEFT", gRew, "RIGHT", 4, 0)
+tip(gFF, "Fast-forward", function() return "Hold to speed the game up.\n" .. (keyOf("ff") or "") end)
+holdable(gFF, "ff", "OnAction")
+local gVol = glassButton(bar, "Vol", 64, "volume")
+gVol:SetPoint("RIGHT", bar, "RIGHT", 0, 0)
+tip(gVol, function() return MB.VolumeText and MB.VolumeText() or "Volume" end,
+    function() return "Mouse wheel, or left-click louder, right-click quieter.\nThe rest of WoW keeps its own volume." end)
+do
+    local function turn(steps)
+        if MB.OnVolume then MB.OnVolume(steps) end
+        local again = gVol:GetScript("OnEnter")
+        if again then again(gVol) end
+    end
+    gVol:SetScript("OnClick", function(_, mouseButton) turn(mouseButton == "RightButton" and -1 or 1) end)
+    gVol:EnableMouseWheel(true)
+    gVol:SetScript("OnMouseWheel", function(_, delta) turn(delta > 0 and 1 or -1) end)
+end
+local gClose = glassButton(pane, "\195\151", 22, "close")      -- (×)
+gClose:SetPoint("TOPRIGHT", pane, "TOPRIGHT", -6, -3)
+tip(gClose, "Put it away", "The game pauses and waits for you.")
+gClose:SetScript("OnClick", function() MB.Hide() end)
+local gHelp = glassButton(pane, "?", 22, "help")
+gHelp:SetPoint("RIGHT", gClose, "LEFT", -4, 0)
+tip(gHelp, "MekkaBoy", function() return (MB.HelpText and MB.HelpText() or "/mb help") .. "\nClick: show or hide the keys." end)
+gHelp:SetScript("OnClick", function()
+    if MB.ToggleKeyDrawer then MB.ToggleKeyDrawer() elseif MB.commands.help then MB.commands.help.run("") end
+end)
+function MB.glassFace(name) return glassFaces[name] end
+MB.glassButtons = { mem = mems, rewind = gRew, ff = gFF, volume = gVol, close = gClose, help = gHelp }
+
+local look = "console"
+local sizeW, sizeH = Lay.bodyW, Lay.bodyH
+function MB.WindowSize() return sizeW, sizeH end
+local function glassColors()
+    return GLASS[colorway()] or GLASS.gunmetal
+end
+local function paintGlass()
+    local c = glassColors()
+    local a = MB.Opt("glassAlpha", 0.66)
+    paneBg:SetColorTexture(c.bg[1], c.bg[2], c.bg[3], a)
+    for _, t in ipairs(edges) do t:SetColorTexture(c.edge[1], c.edge[2], c.edge[3], c.edge[4]) end
+    for _, b in ipairs(glassButtons) do
+        b.face:SetColorTexture(c.ink[1], c.ink[2], c.ink[3], 0.08)
+        b.label:SetTextColor(c.ink[1], c.ink[2], c.ink[3])
+    end
+    if look == "glass" then
+        status:SetTextColor(c.ink[1], c.ink[2], c.ink[3])
+        flightText:SetTextColor(c.soft[1], c.soft[2], c.soft[3])
+        flightText:SetShadowColor(0, 0, 0, 0)
+    end
+    if powered then dot:SetColorTexture(c.accent[1], c.accent[2], c.accent[3], 1) else dot:SetColorTexture(c.soft[1], c.soft[2], c.soft[3], 0.5) end
+    if MB.PaintKeyDrawer then MB.PaintKeyDrawer() end
+    if MB.PaintFriends then pcall(MB.PaintFriends) end
+end
+MB.PaintGlass = paintGlass
+function MB.GlassColors() return glassColors(), MB.Opt("glassAlpha", 0.66) end    -- (the key drawer wears them too: UI/KeyDrawer.lua)
+
+-- the parts only the console has
+local consoleParts = { body, needle, knob }
+for _, b in pairs(MB.buttons) do consoleParts[#consoleParts + 1] = b end
+
+function MB.Look() return look end
+local function applyLook()
+    look = (MB.Opt("look", "glass") == "console") and "console" or "glass"
+    local glassy = look == "glass"
+    for _, part in ipairs(consoleParts) do part:SetShown(not glassy) end
+    for _, t in pairs(pressGlow) do t:Hide() end
+    pane:SetShown(glassy)
+    if glassy then
+        sizeW, sizeH = glassW, glassH
+        win:SetSize(glassW, glassH)
+        at(screen, G_PAD, G_TOP, scr[3], scr[4])
+        status:ClearAllPoints()
+        status:SetPoint("LEFT", pane, "TOPLEFT", G_PAD + 16, -G_TOP / 2)
+        status:SetWidth(scr[3] - 80)
+        status:SetJustifyH("LEFT")
+        flightText:ClearAllPoints()
+        flightText:SetPoint("RIGHT", gVol, "LEFT", -10, 0)
+        lamp:Hide()
+        paintGlass()
+    else
+        sizeW, sizeH = Lay.bodyW, Lay.bodyH
+        win:SetSize(Lay.bodyW, Lay.bodyH)
+        at(screen, scr[1], scr[2], scr[3], scr[4])
+        at(status, sp[1] + 6, sp[2] + 1, sp[3] - 12, sp[4] - 2)
+        status:SetJustifyH("CENTER")
+        status:SetTextColor(1, 0.86, 0.55)
+        flightText:ClearAllPoints()
+        flightText:SetPoint("CENTER", win, "TOPLEFT", ga[1], -(ga[2] + ga[3] + 12))
+        flightText:SetTextColor(0.25, 0.16, 0.05)
+        flightText:SetShadowColor(1, 0.9, 0.6, 0.5)
+        lamp:SetShown(powered)
+        if MB.PaintKeyDrawer then MB.PaintKeyDrawer() end
+    end
+    if MB.ApplyScale and MB.DB then pcall(MB.ApplyScale) end
+end
+MB.ApplyLook = applyLook
+function MB.SetLook(v)
+    v = (v or ""):lower()
+    if v == "minimal" or v == "glass" then v = "glass" elseif v ~= "console" then return false end
+    MB.DB().opt.look = v
+    applyLook()
+    return true
+end
+MB.LOOK_WORDS = { glass = "Minimal", console = "Console" }
+MB.onLogin[#MB.onLogin + 1] = applyLook
+
+-- the bar under the picture dims while the mouse is elsewhere (it is still there, and works, at a glance)
+pane:SetScript("OnUpdate", function(self, elapsed)
+    self.t = (self.t or 0) + elapsed
+    if self.t < 0.1 then return end
+    self.t = 0
+    local over = win:IsMouseOver()
+    bar:SetAlpha(over and 1 or 0.45)
+end)
+
 -- ---------------------------------------------------- scale, position ---
 -- One game pixel is 2 design units; the window is scaled so that this is
 -- a whole number of real screen pixels (no seams between pixels).
@@ -345,7 +542,8 @@ function MB.ApplyScale()
         k = math.floor(2 / px + 0.5)          -- about 2 UI units per pixel ...
         local room, across = UIParent:GetHeight() or 768, UIParent:GetWidth() or 1024
         -- ... unless that is taller than the screen, or takes up most of its width
-        while k > 1 and (Lay.bodyH * k * px / 2 > room * 0.86 or Lay.bodyW * k * px / 2 > across * 0.62) do k = k - 1 end
+        local w, h = MB.WindowSize()
+        while k > 1 and (h * k * px / 2 > room * 0.86 or w * k * px / 2 > across * 0.62) do k = k - 1 end
     end
     if k < 1 then k = 1 elseif k > 6 then k = 6 end
     win:SetScale(k * px / 2)

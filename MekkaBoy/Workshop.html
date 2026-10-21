@@ -87,6 +87,23 @@ footer.site { border-top: 1px solid var(--line); }
 footer.site .wrap { padding-top: 24px; padding-bottom: 36px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px 32px; font-size: 14px; color: var(--dim); }
 footer.site .links { display: flex; flex-wrap: wrap; gap: 6px 20px; } footer.site .links a { color: var(--muted); }
 footer.site .legal { max-width: 620px; }
+/* the sound step */
+fieldset.choice { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; }
+fieldset.choice legend { font-size: 14px; color: var(--muted); margin-bottom: 4px; padding: 0; }
+fieldset.choice label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 16px; }
+fieldset.choice input { margin-top: 5px; width: 18px; height: 18px; accent-color: var(--gold); flex: none; }
+fieldset.choice input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+fieldset.choice .sub { display: block; font-size: 14px; color: var(--muted); }
+fieldset.choice input:disabled + span { color: var(--faint); }
+.buttons { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+button.second { background: transparent; color: var(--bright); border: 1px solid var(--line-strong); }
+button.second:hover { background: var(--chip); }
+progress { width: 100%; max-width: 32rem; height: 12px; border: 0; border-radius: 6px; background: var(--chip); accent-color: var(--gold); }
+progress::-webkit-progress-bar { background: var(--chip); border-radius: 6px; }
+progress::-webkit-progress-value { background: var(--gold); border-radius: 6px; }
+progress::-moz-progress-bar { background: var(--gold); border-radius: 6px; }
+.status { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; }
+.said.bad { color: var(--warn); }
 @media (prefers-reduced-motion: reduce) { .cart { transition: none; } }
 </style>
 </head>
@@ -168,6 +185,41 @@ footer.site .legal { max-width: 620px; }
       <p>The game keeps its saves with MekkaBoy. To take it off the shelf, delete its folder.</p>
     </li>
   </ol>
+
+  <p class="note" id="sndOffline" hidden>This copy of the Workshop cannot record a game's sound. Open <a href="https://workshop.mekkaboy.com/">workshop.mekkaboy.com</a> and pick the file there to record its music.</p>
+
+  <ol class="steps" id="stepsSound" hidden style="counter-reset: step 3; margin-top: 24px">
+    <li id="stepRecord">
+      <h2>Record its sound <span style="font-weight: 500; color: var(--muted)">(optional)</span></h2>
+      <p id="sndSays">Looking at the game&hellip;</p>
+      <div id="sndControls" hidden>
+        <fieldset class="choice" id="sndChoice">
+          <legend>What to record</legend>
+          <label><input type="radio" name="sndMode" value="music" checked><span id="sndMusicLabel">Music only<span class="sub"></span></span></label>
+          <label><input type="radio" name="sndMode" value="all"><span id="sndAllLabel">Music and sound effects<span class="sub"></span></span></label>
+        </fieldset>
+      </div>
+      <div class="buttons" id="sndButtons" hidden>
+        <button id="sndStart">Record</button>
+        <button id="sndCancel" class="second" hidden>Stop</button>
+        <button id="sndSave" hidden>Save the folder with sound</button>
+        <button id="sndAgain" class="second" hidden>Delete this recording</button>
+      </div>
+      <progress id="sndBar" max="1" value="0" hidden aria-label="Recording progress"></progress>
+      <div class="status" id="sndStatus" hidden></div>
+      <div class="said" id="sndSaid" role="status" aria-live="polite"></div>
+      <p class="note" id="sndKeep" hidden>Keep this tab open while it records. You can use other tabs and programs; it works in the background. If the tab closes, pick the same file again and it carries on from where it stopped.</p>
+    </li>
+    <li id="stepSoundPut" class="waiting">
+      <h2>Put it in place of the old folder</h2>
+      <ul class="keys">
+        <li>Close the game.</li>
+        <li>Open the zip. Inside is the same folder as in step 2, <code id="sndFolder">MekkaBoy_Cart</code>, now with a <code>Sound</code> folder and a <code>Pack.lua</code> file in it. Put it in <code>Interface\AddOns</code> in place of the one you put there before, and let it replace the files. If you skipped step 2, put it there now.</li>
+        <li>Start the game again (a full start, not <code>/reload</code>: the game client only finds new sound files when it starts) and type <code id="sndCommand">/mb cart</code>. The music plays when the game starts it.</li>
+      </ul>
+      <p>The sound is made from your own copy of the game, for your own computer. Don't share it. <a href="sound/NOTICES.txt">Notices for the software the recorder uses</a>.</p>
+    </li>
+  </ol>
 </section>
 
 <section class="readfirst wrap">
@@ -178,7 +230,7 @@ footer.site .legal { max-width: 620px; }
   </div>
   <div>
     <h2>Sound and speed</h2>
-    <p>A game you add this way has no sound. Sound needs a soundtrack pack recorded from your copy using the tools in the download; the <a href="https://mekkaboy.com/faq/">FAQ</a> explains how. If you skip that step, the game plays silently. The four included games have their music already.</p>
+    <p>A Game Boy or Game Boy Color game you add this way has no sound. Its sound needs a soundtrack pack recorded from your copy using the tools in the download; the <a href="https://mekkaboy.com/faq/">FAQ</a> explains how. Most Advance games can have their music and sound effects recorded here instead, after you pick the file: it takes from a few minutes to half an hour on a computer, and the recording stays on that computer. The four included games have their music already.</p>
     <p>If you want to know whether a game runs well before you go through this, check the <a href="https://mekkaboy.com/tested/">Tested page</a>. Game Boy, Game Boy Color and most cartridge types work; a few rare ones (camera, tilt sensor) do not. Heavy Advance games run slow.</p>
   </div>
 </section>
@@ -380,8 +432,15 @@ var Workshop = (function () {
     return cleanName(n) || "Game";
   }
   // a name goes between quotes in the cartridge's files: nothing in it may end the quotes or the line
-  function cleanName(n) {
-    return String(n).replace(/"/g, "'").replace(/[\\\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  // the name as given (quotes, backslashes and all: it goes into the cartridge's Lua escaped, as Tools/gba2lua.py does)
+  function cleanName(n) { return String(n).trim(); }
+  // a line of a .toc cannot hold line breaks: control characters become spaces there
+  function tocText(n) { return n.replace(/[\u0000-\u001f\u007f]/g, " ").trim(); }
+  // the name as a Lua string, its UTF-8 bytes escaped as luaString does a piece of the game
+  function luaText(n) {
+    var b = new TextEncoder().encode(n), out = new Uint8Array(b.length * 4 + 2), at = luaString(out, 0, b, 0, b.length), t = "";
+    for (var i = 0; i < at; i++) t += String.fromCharCode(out[i]);
+    return t;
   }
   // have we tried this game? { entry, exact } (the entry of another version of it if not this one)
   function tried(rom) {
@@ -428,7 +487,7 @@ var Workshop = (function () {
       "-- A MekkaBoy Advance cartridge, written by " + by + ". Your own copy of a game: do not share.\n" +
       "local _, C = ...\n" +
       "if not (MekkaBoy and MekkaBoy.NewCartridge) then return end\n" +
-      'C.banks = MekkaBoy.NewCartridge({ id = "' + id + '", name = "' + name + '", numBanks = ' + banks + ', system = "gba", size = ' + size +
+      'C.banks = MekkaBoy.NewCartridge({ id = "' + id + '", name = ' + luaText(name) + ', numBanks = ' + banks + ', system = "gba", size = ' + size +
       (chip ? ', chip = "' + chip + '"' : "") + " })\n") });
     var head = "-- Written by " + by + ".\nlocal _, C = ...\nlocal B = C.banks\nif not B then return end\nlocal rep = string.rep\n";
     var last = new Uint8Array(BANK);
@@ -449,9 +508,9 @@ var Workshop = (function () {
       }
       files.push({ name: "rom" + String(p + 1).padStart(2, "0") + ".lua", bytes: out.subarray(0, at) });
     }
-    var toc = ["## Interface: 16001", "## Title: MekkaBoy Advance Cartridge - " + name,
+    var toc = ["## Interface: 16001", "## Title: MekkaBoy Advance Cartridge - " + tocText(name),
                "## Notes: A game for MekkaBoy Advance (experimental), made from your own copy. Not for sharing.",
-               "## LoadOnDemand: 1", "## RequiredDeps: MekkaBoy", "## X-MekkaBoy-Cart: " + id, "## X-MekkaBoy-Name: " + name, "## X-MekkaBoy-System: gba",
+               "## LoadOnDemand: 1", "## RequiredDeps: MekkaBoy", "## X-MekkaBoy-Cart: " + id, "## X-MekkaBoy-Name: " + tocText(name), "## X-MekkaBoy-System: gba",
                "## X-MekkaBoy-Code: " + l.key];
     for (var i = 0; i <= PARTS; i++) toc.push("rom" + String(i).padStart(2, "0") + ".lua");
     files.push({ name: "MekkaBoy_Cart_" + id + ".toc", bytes: utf8.encode(toc.join("\n") + "\n") });
@@ -509,6 +568,320 @@ var Workshop = (function () {
 if (typeof module !== "undefined") module.exports = Workshop;
 </script>
 
+<script id="workshop-sound">
+// The sound step: records an Advance game's music and sounds in this browser (sound/engine.js, in Web Workers),
+// keeps what is finished in this browser's storage (IndexedDB) so a closed tab can carry on, and hands over the
+// cartridge folder again with the Sound folder and Pack.lua in it. Nothing is uploaded; once this page has fetched
+// its recorder files (sound/), recording needs no network.
+var SoundStep = (function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var FILES = { locate: "sound/m4alocate.js", engine: "sound/engine.js", apu: "sound/apu.js", worker: "sound/worker.js", rec: "sound/rec.lua",
+                core: "sound/lua/GBACore.lua", wasmoon: "sound/vendor/wasmoon-lua5.1.js", luaWasm: "sound/vendor/liblua5.1.wasm",
+                encoder: "sound/vendor/wasm-media-encoders.js", oggWasm: "sound/vendor/ogg.wasm" };
+  var urls = null, loading = null;            // the recorder's files, fetched once, as blob: URLs
+  var game = null;                            // { rom, info, hash, loc, prof, done: Map name -> item }
+  var run = null;                             // the recording under way
+  var CRY_WORDS = { n: "", d: " (short)", f: " (fainting)", w: " (hurt)" };
+  // (for the page's own tests: window.__soundJobFilter(job) -> false leaves a job out)
+  function wanted(j) { return typeof window.__soundJobFilter !== "function" || window.__soundJobFilter(j); }
+
+  // ---- the recorder's files: fetched when the page has loaded, so a game can be recorded offline afterwards
+  function fetchAll() {
+    if (loading) return loading;
+    if (location.protocol === "file:") return (loading = Promise.resolve(null));
+    loading = Promise.all(Object.keys(FILES).map(function (k) {
+      return fetch(FILES[k]).then(function (r) { if (!r.ok) throw new Error(FILES[k]); return r.blob(); }).then(function (b) { return [k, URL.createObjectURL(b)]; });
+    })).then(function (pairs) {
+      var u = {}; pairs.forEach(function (p) { u[p[0]] = p[1]; });
+      return Promise.all([script(u.locate), script(u.engine)]).then(function () { return (urls = u); });
+    }).catch(function () { return null; });
+    return loading;
+  }
+  function script(src) {
+    return new Promise(function (ok, no) { var s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); });
+  }
+
+  // ---- this browser's storage: the finished files of each game (by the game's SHA-1)
+  var dbP = null;
+  function db() {
+    if (dbP) return dbP;
+    dbP = new Promise(function (ok, no) {
+      if (!window.indexedDB) return no(new Error("no storage"));
+      var q = indexedDB.open("mekkaboy-workshop-sound", 1);
+      q.onupgradeneeded = function () { var s = q.result.createObjectStore("files", { keyPath: ["hash", "name"] }); s.createIndex("hash", "hash"); };
+      q.onsuccess = function () { ok(q.result); };
+      q.onerror = function () { no(q.error); };
+    });
+    return dbP;
+  }
+  function tx(mode, f) {
+    return db().then(function (d) {
+      return new Promise(function (ok, no) {
+        var t = d.transaction("files", mode), out = f(t.objectStore("files"));
+        t.oncomplete = function () { ok(out && out.result); };
+        t.onerror = t.onabort = function () { no(t.error); };
+      });
+    });
+  }
+  function stored(hash) {        // -> Map name -> { name, meta, ms } (without the sound itself)
+    return tx("readonly", function (s) { return s.index("hash").getAll(hash); }).then(function (rows) {
+      var m = new Map(); (rows || []).forEach(function (r) { m.set(r.name, { name: r.name, meta: r.meta, ms: r.ms }); }); return m;
+    }).catch(function () { return new Map(); });
+  }
+  function keep(hash, item, ogg) { return tx("readwrite", function (s) { s.put({ hash: hash, name: item.name, meta: item.meta, ms: item.ms, ogg: ogg }); }); }
+  function forget(hash) {
+    return tx("readwrite", function (s) { var q = s.index("hash").openKeyCursor(IDBKeyRange.only(hash)); q.onsuccess = function () { var c = q.result; if (c) { s.delete(c.primaryKey); c.continue(); } }; });
+  }
+  function allFiles(hash) { return tx("readonly", function (s) { return s.index("hash").getAll(hash); }); }
+
+  // ---- how many recorders this computer can take
+  function capacity() {
+    var cores = navigator.hardwareConcurrency || 2, n = Math.max(1, Math.min(4, cores - 1)), mem = navigator.deviceMemory;
+    if (mem !== undefined) {
+      if (mem < 2) return { workers: 0, why: "This device says it has less than 2 GB of memory. Recording needs about 1 GB free, so it cannot run here. Use a computer with more memory." };
+      if (mem < 4) n = 1; else if (mem < 8) n = Math.min(n, 2);
+    }
+    return { workers: n };
+  }
+  function phone() {
+    var ua = navigator.userAgent || "";
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua) && matchMedia("(pointer: coarse)").matches);
+  }
+
+  function say(text, bad) { var s = $("sndSaid"); s.textContent = text || ""; s.classList.toggle("bad", !!bad); }
+  function mb(n) { return n >= 10485760 ? Math.round(n / 1048576) + " MB" : (Math.round(n / 104857.6) / 10) + " MB"; }
+  function minutes(lo, hi) { return lo === hi ? "about " + lo + " minute" + (lo === 1 ? "" : "s") : "about " + lo + " to " + hi + " minutes"; }
+  function clock(s) { s = Math.max(1, Math.round(s)); return s === 1 ? "1 second" : s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes"; }
+  function mode() { var r = document.querySelector('input[name="sndMode"]:checked'); return r ? r.value : "music"; }
+  function show(id, on) { $(id).hidden = !on; }
+  function what(job) {
+    if (job.kind === "cry") return "cry " + Number(job.name.slice(1, 4)) + CRY_WORDS[job.name[5]];
+    return (job.music ? "song " : "sound ") + job.n;
+  }
+
+  // ---- a game has been picked
+  async function pick(rom, info) {
+    stopRun(true);
+    game = null;
+    $("stepsSound").hidden = true; $("sndOffline").hidden = true;
+    var u = await fetchAll();
+    if (!u) { $("sndOffline").hidden = false; return; }
+    var hash = await Workshop.sha1(rom);
+    var loc = M4aLocate.locate(rom);
+    game = { rom: rom, info: info, hash: hash, loc: loc, prof: (hash && MekkaSound.PROFILES[hash]) || null, done: new Map() };
+    $("stepsSound").hidden = false;
+    $("sndFolder").textContent = "MekkaBoy_Cart_" + info.id;
+    $("sndCommand").textContent = "/mb cart " + info.id.toLowerCase();
+    ["sndControls", "sndButtons", "sndBar", "sndStatus", "sndKeep", "sndCancel", "sndSave", "sndAgain"].forEach(function (id) { show(id, false); });
+    $("stepSoundPut").classList.add("waiting");
+    $("stepSoundPut").hidden = true;          // (shown only when this game can be recorded here)
+    say("");
+    if (!loc.m4a) {
+      $("sndSays").textContent = "The Workshop cannot record this game's sound: it does not use the music program most Advance games share, and the recorder only knows that one. The game plays without sound.";
+      return;
+    }
+    var cap = capacity();
+    game.workers = cap.workers;
+    if (phone()) { $("sndSays").textContent = "Recording a game's sound needs a computer. On a phone or tablet it is too slow, and it stops when the screen turns off."; return; }
+    if (!cap.workers) { $("sndSays").textContent = cap.why; return; }
+    if (!hash) { $("sndSays").textContent = "This browser cannot keep a recording. Use a current Chrome, Edge or Firefox."; return; }
+    game.done = await stored(hash);
+    describe();
+  }
+
+  // what there is to record, how long it takes, how big it is
+  function describe() {
+    var loc = game.loc, music = MekkaSound.planJobs(loc, "music"), all = MekkaSound.planJobs(loc, "all");
+    var cries = game.prof ? Math.round(game.prof.species * 0.88) * 4 : 0;      // (about 386 cries, four ways each, for the third-generation games)
+    var w = game.workers, em = MekkaSound.estimate(music, w), ea = MekkaSound.estimate(all.concat(new Array(cries).fill({ music: false })), w);
+    var cryText = cries ? " and the cries of every Pokémon" : "";
+    $("sndAllLabel").firstChild.textContent = cries ? "Music, sound effects and cries" : "Music and sound effects";
+    var cap1 = function (t) { return t.charAt(0).toUpperCase() + t.slice(1); };
+    $("sndMusicLabel").querySelector(".sub").textContent = em.music + " songs. " + cap1(minutes(em.minutesLo, em.minutesHi)) + ", " + mb(em.bytes) + ". Faster.";
+    $("sndAllLabel").querySelector(".sub").textContent = em.music + " songs, " + (all.length - em.music) + " sound effects" + cryText + ". " +
+      cap1(minutes(ea.minutesLo, ea.minutesHi)) + ", " + mb(ea.bytes) + ".";
+    var have = game.done.size;
+    $("stepSoundPut").hidden = false;
+    $("sndSays").textContent = "This game uses the music program most Advance games share, so its music can be recorded from your copy, here in your browser. " +
+      "It uses " + w + " of this computer's processor cores. The times below are a guess; once it runs, it shows how long is left.";
+    show("sndControls", true); show("sndButtons", true);
+    $("sndChoice").disabled = false;
+    show("sndStart", true); show("sndCancel", false); show("sndKeep", false); show("sndBar", false); show("sndStatus", false);
+    if (have) {
+      $("sndStart").textContent = "Carry on recording";
+      show("sndSave", true); show("sndAgain", true);
+      say(have + " finished " + (have === 1 ? "piece is" : "pieces are") + " kept in this browser from before. Carry on to record the rest, or save the folder with what there is.");
+    } else {
+      $("sndStart").textContent = "Record";
+      show("sndSave", false); show("sndAgain", false);
+    }
+  }
+
+  // ---- recording
+  function startRun() {
+    if (!game || run) return;
+    var m = mode(), jobs = MekkaSound.planJobs(game.loc, m).filter(function (j) { return !game.done.has(j.name) && wanted(j); });
+    run = { mode: m, queue: jobs, total: jobs.length, finished: 0, failed: [], workers: [], busy: 0, t0: Date.now(), audio: 0, work: 0,
+            cries: m === "all" && !!game.prof, cryPlanned: false, lock: null, stopped: false, saving: 0, ending: false };
+    $("sndChoice").disabled = true;
+    show("sndStart", false); show("sndSave", false); show("sndAgain", false); show("sndCancel", true); show("sndKeep", true);
+    show("sndBar", true); show("sndStatus", true);
+    $("sndBar").removeAttribute("value");                    // (a moving bar while the recorders start)
+    $("sndStatus").textContent = "Starting " + game.workers + " recorder" + (game.workers > 1 ? "s" : "") + "…";
+    say("");
+    if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (l) { if (run) run.lock = l; else l.release(); }, function () {});
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
+    for (var i = 0; i < game.workers; i++) spawn(i);
+  }
+  function spawn(i) {
+    var w = new Worker(urls.worker);
+    var slot = { w: w, job: null, ready: false, index: i };
+    run.workers.push(slot);
+    w.onmessage = function (e) { message(slot, e.data); };
+    w.onerror = function (e) { e.preventDefault(); fail("A recorder stopped with an error (" + (e.message || "unknown") + ")."); };
+    w.postMessage({ type: "init", urls: urls, rom: game.rom.slice().buffer, loc: strip(game.loc), prof: game.prof });
+  }
+  function strip(loc) { var c = {}; for (var k in loc) if (k !== "list") c[k] = loc[k]; c.list = []; return c; }
+  function message(slot, m) {
+    if (!run || run.stopped) return;
+    if (m.type === "ready") {
+      slot.ready = true;
+      if (run.cries && !run.cryPlanned) { run.cryPlanned = true; slot.w.postMessage({ type: "cryplan" }); slot.planning = true; return; }
+      feed(slot);
+    } else if (m.type === "cryplan") {
+      slot.planning = false;
+      var more = m.jobs.filter(function (j) { return !game.done.has(j.name) && wanted(j); });
+      run.queue = run.queue.concat(more); run.total += more.length;
+      run.workers.forEach(function (s) { if (s.ready && !s.job && !s.planning) feed(s); });
+    } else if (m.type === "done") {
+      var item = { name: m.job.name, meta: m.meta, ms: m.job.ms }, r = run;
+      r.saving++;
+      keep(game.hash, item, m.ogg).then(function () {
+        game.done.set(item.name, item);
+        r.saving--;
+        if (run === r) { progress(m.job, m.meta); if (r.ending && !r.saving) complete(); }
+      }, function (err) {
+        fail(err && err.name === "QuotaExceededError" ? "This browser would not keep any more of the recording: it is out of space for this site. Free some disk space, then press Carry on recording."
+                                                      : "This browser would not keep the recording (" + (err && err.message || err) + ").");
+      });
+      slot.job = null; run.finished++;
+      feed(slot);
+    } else if (m.type === "failed") {
+      run.failed.push(what(m.job)); run.finished++; slot.job = null;
+      progress(m.job, null); feed(slot);
+    } else if (m.type === "fatal") {
+      fail("The recorder could not start this game's music program (" + m.error + "). The game plays without sound.");
+    }
+  }
+  function feed(slot) {
+    if (!run || run.stopped) return;
+    var job = run.queue.shift();
+    if (!job) {
+      slot.w.terminate(); slot.gone = true;
+      if (run.workers.every(function (s) { return s.gone; })) { run.ending = true; if (!run.saving) complete(); }
+      return;
+    }
+    slot.job = job; slot.since = Date.now();
+    slot.w.postMessage({ type: "job", job: job });
+    status();
+  }
+  function weight(job) { return job.music ? 112 : 1.5; }
+  function progress(job, meta) {
+    if (meta) run.audio += meta.len;
+    run.work += weight(job);
+    status();
+  }
+  function status() {
+    if (!run) return;
+    var now = Date.now(), left = run.queue.reduce(function (a, j) { return a + weight(j); }, 0);
+    run.workers.forEach(function (s) { if (s.job) left += weight(s.job) / 2; });
+    var done = run.finished, total = run.total, el = (now - run.t0) / 1000;
+    $("sndBar").max = Math.max(1, total); $("sndBar").value = done;
+    var current = run.workers.filter(function (s) { return s.job; }).map(function (s) { return what(s.job); });
+    var line = "Recording " + Math.min(total, done + 1) + " of " + total + (current.length ? ": " + current.join(", ") : "") + ".";
+    var rate = run.work > 0 && el > 20 ? run.work / el : 0, eta;
+    if (rate) eta = " About " + clock(left / rate) + " left.";
+    else {                                     // (until the first piece is done: the guess made before starting)
+      var g = MekkaSound.estimate(run.queue.concat(run.workers.filter(function (s) { return s.job; }).map(function (s) { return s.job; })), game.workers);
+      eta = " " + minutes(g.minutesLo, g.minutesHi).replace(/^a/, "A") + " left, as a first guess.";
+    }
+    $("sndStatus").textContent = line + eta;
+    // (the spoken status changes less often than the line above)
+    if (!run.spoke || now - run.spoke > 30000) { run.spoke = now; say(done + " of " + total + " recorded." + (rate ? " About " + clock(left / rate) + " left." : "")); }
+  }
+  function stopRun(quietly) {
+    if (!run) return;
+    run.stopped = true;
+    run.workers.forEach(function (s) { try { s.w.terminate(); } catch (e) { /* (gone) */ } });
+    if (run.lock) run.lock.release().catch(function () {});
+    run = null;
+  }
+  function fail(text) {
+    stopRun(); describe(); say(text, true);
+  }
+  function complete() {
+    var r = run; stopRun();
+    describe();
+    $("stepSoundPut").classList.remove("waiting");
+    var failed = r.failed.length ? " " + r.failed.length + " could not be recorded (" + r.failed.slice(0, 5).join(", ") + (r.failed.length > 5 ? ", …" : "") + "); the folder has the rest." : "";
+    $("sndStart").textContent = mode() === "music" ? "Record the sound effects too" : "Carry on recording";
+    var rest = MekkaSound.planJobs(game.loc, "all").some(function (j) { return !game.done.has(j.name); }) || (game.prof && ![...game.done.keys()].some(function (k) { return k[0] === "c"; }));
+    show("sndStart", rest);
+    say("Recorded in " + clock((Date.now() - r.t0) / 1000) + "." + failed + " Save the folder with sound, then step 5.");
+    $("sndSave").focus();
+  }
+
+  // ---- the folder with sound, as one zip
+  async function save() {
+    var b = $("sndSave");
+    b.disabled = true;
+    say("Making the folder with sound…");
+    try {
+      var rows = await allFiles(game.hash), info = game.info;
+      if (!rows || !rows.length) { say("There is nothing recorded yet. Press Record first.", true); b.disabled = false; return; }
+      var name = Workshop.cleanName($("advName").value) || info.name;
+      var files = Workshop.cartridge(game.rom, info.id, name);
+      var toc = files.filter(function (f) { return /\.toc$/.test(f.name); })[0];
+      toc.bytes = new TextEncoder().encode(new TextDecoder().decode(toc.bytes).replace(/\s*$/, "") + "\nPack.lua\n");
+      rows.sort(function (x, y) { return x.name < y.name ? -1 : 1; });
+      var pack = MekkaSound.packLua(info.id, name, game.hash, game.loc, game.prof, rows);
+      files.push({ name: "Pack.lua", bytes: new TextEncoder().encode(pack) });
+      rows.forEach(function (r) { if (r.meta.rms >= 0.0005) files.push({ name: "Sound/" + r.name + ".ogg", bytes: new Uint8Array(r.ogg) }); });
+      var blob = new Blob(Workshop.zipParts("MekkaBoy_Cart_" + info.id, files, new Date()), { type: "application/zip" });
+      var zipName = name.replace(/[\\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim() + " (MekkaBoy cartridge with sound).zip";
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = zipName;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+      say("Saved “" + zipName + "” (" + mb(blob.size) + "). Your browser keeps it with your downloads. Now step 5.");
+      $("stepSoundPut").classList.remove("waiting");
+    } catch (e) {
+      say("The folder could not be made here (" + (e && e.message || e) + "). Try again; if it keeps failing, open the Workshop in a current Chrome, Edge or Firefox.", true);
+    }
+    b.disabled = false;
+  }
+
+  function init() {
+    $("sndStart").addEventListener("click", startRun);
+    $("sndCancel").addEventListener("click", function () {
+      var n = game ? game.done.size : 0;
+      stopRun(); describe();
+      say("Stopped. The " + n + " finished " + (n === 1 ? "piece is" : "pieces are") + " kept in this browser; Carry on recording picks up from there, even after the tab is closed.");
+      $("sndStart").focus();
+    });
+    $("sndSave").addEventListener("click", save);
+    $("sndAgain").addEventListener("click", function () {
+      if (!game || !confirm("Delete the recording of this game kept in this browser? The files you already saved stay where they are.")) return;
+      forget(game.hash).then(function () { game.done = new Map(); describe(); say("Deleted. Press Record to record it again."); });
+    });
+    window.addEventListener("beforeunload", function (e) { if (run) { e.preventDefault(); e.returnValue = ""; } });
+    // (the recorder is fetched when an Advance game is picked, not for every visitor)
+  }
+  document.addEventListener("DOMContentLoaded", init);
+  return { pick: pick, hide: function () { stopRun(); game = null; $("stepsSound").hidden = true; $("sndOffline").hidden = true; } };
+})();
+</script>
+
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -543,6 +916,7 @@ if (typeof module !== "undefined") module.exports = Workshop;
     $("arrow").textContent = "Step 1";
     said.textContent = "The button works once a file is in.";
     advSaid.textContent = "";
+    SoundStep.hide();
   }
   function kb(n) { return Math.round(n / 1024).toLocaleString() + " KB"; }
   function mb(n) { return (n / 1048576 >= 10 ? Math.round(n / 1048576) : Math.round(n / 104857.6) / 10).toLocaleString() + " MB"; }
@@ -564,15 +938,16 @@ if (typeof module !== "undefined") module.exports = Workshop;
     var saving = info.chip ? "It saves (" + info.chipWords + ")." : "No save chip was found in it: a game with passwords, or one that does not save.";
     if (!e) {
       problem("This is not a game we have tried. It may play, play with faults, or stop.");
-      note(saving + " It plays without sound.");
+      note(saving);
     } else if (e.status === "stops") {
       problem(e.name + " does not run in MekkaBoy yet." + (e.note ? " " + e.note : "") + other + " You can still make the cartridge.");
       note("");
     } else {
       if (info.slow) problem("A heavy game (" + e.weight + " of 10): expect it to run slow.");
       note((e.status === "played" ? "We have played this game at length in MekkaBoy." : "This game starts and plays in our tests; we have not played it at length yet.") +
-           other + " " + saving + " It plays without sound.");
+           other + " " + saving);
     }
+    SoundStep.pick(bytes, info);
   }
   function fileSafe(name) { return name.replace(/[\\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim() || "Game"; }
   // Hand the zip to the viewer: the browser saves it straight away.

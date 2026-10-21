@@ -116,6 +116,7 @@ function Sys.keep(m, id, quiet, say)
     local t = m.getSave()
     t.at = date and date("%Y-%m-%d %H:%M") or "?"
     MB.Saves().gba[id] = t
+    MB.BatteryKept(id)
     if quiet or quietOnce then quietOnce = false return end
     if say then say("Save kept") end
     if not savedOnce then

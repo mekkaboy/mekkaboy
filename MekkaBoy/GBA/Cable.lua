@@ -316,6 +316,12 @@ function Ghost:receive(msg)
         local round = roundOf(self, byte(msg, 2))
         catchUp(self, round)
         if round == self.round then self.go = round end
+    elseif kind == "T" then
+        -- (a trade where you stand being agreed: GBA/Trade3.lua)
+        if MB.Trade3 and MB.Trade3.Control then
+            local ok, err = pcall(MB.Trade3.Control, self, msg:sub(2))
+            if not ok and MB.Print then MB.Print("Trade: " .. tostring(err)) end
+        end
     elseif kind == "D" then
         local round = roundOf(self, byte(msg, 2))
         local gap, count, mask = byte(msg, 3), byte(msg, 4), byte(msg, 5)

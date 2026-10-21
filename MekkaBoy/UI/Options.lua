@@ -137,7 +137,11 @@ local function build()
         function() return MB.Opt("scale", nil) or 0 end,
         function(v) db().opt.scale = (v >= 1) and v or nil MB.ApplyScale() end,
         function(v) return v >= 1 and ("%d"):format(v) or "Automatic" end), 20, 28)
-    place(slider(panel, "Color", 1, #MB.Colorways, 1, "The console's color. Also: /mb color <name>.",
+    place(slider(panel, "Look", 1, 2, 1, "Minimal: a see-through window, played on the keyboard. Console: the MekkaBoy handheld, every button clickable. Also: /mb look minimal|console.",
+        function() return (MB.Look and MB.Look() == "console") and 2 or 1 end,
+        function(v) MB.SetLook(v == 2 and "console" or "glass") end,
+        function(v) return v == 2 and "Console" or "Minimal" end), 20, 28)
+    place(slider(panel, "Color", 1, #MB.Colorways, 1, "The color, for either look. Also: /mb color <name>.",
         function() for i, c in ipairs(MB.Colorways) do if c == MB.Colorway() then return i end end return 1 end,
         function(v) MB.SetColorway(MB.Colorways[v] or "gunmetal") end,
         function(v) return MB.ColorwayNames[MB.Colorways[v] or "gunmetal"] end), 20, 28)
@@ -167,10 +171,18 @@ local function build()
     place(check(panel, "Leave a note on the console when someone whispers me", "The game carries on; the status plate says who it was.",
         function() return MB.Opt("whisperNote", true) end, function(v) db().opt.whisperNote = v end), 16, 36)
 
+    heading("Playing with others")
+    local MODES = { "solo", "friends", "open" }
+    place(slider(panel, "How I play", 1, 3, 1, "Open (the default): anyone who targets you, and your group and guild, can see that you have MekkaBoy and what you are playing. Friends only: just your group, friends list, guild and the players you have linked with. Solo: nobody is told, nobody is asked, and Together is off. Also: /mb play.",
+        function() for i, k in ipairs(MODES) do if k == MB.PlayMode() then return i end end return 3 end,
+        function(v) MB.SetPlayMode(MODES[v] or "open") end,
+        function(v) return MB.PLAY_WORDS[MODES[v] or "open"] end), 20, 28)
+
     local x = 16
     for _, b in ipairs({
         { "Add a game", 110, function() MB.CloseOptions() if MB.Import then MB.Import.Open() end end },
         { "Show the controls", 140, function() if MB.commands.keys then MB.commands.keys.run("") end end },
+        { "Friends", 90, function() MB.CloseOptions() if MB.Friends and MB.Friends.Open then MB.Friends.Open() end end },
         { "Back to the middle", 140, function() if MB.commands.center then MB.commands.center.run("") end end },
     }) do
         local btn = button(panel, b[1], b[2], b[3])

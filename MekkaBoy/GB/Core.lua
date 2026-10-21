@@ -534,6 +534,7 @@ function GB.new(cfg)
 
   local rom0 = bank(0)
   local romb = bank(1)
+  local romLo = rom0                 -- what 0x0000-0x3FFF shows: bank 0, except an MBC1 in its second mode
   local cartType = rom0[0x147]
   local cgb = rom0[0x143] >= 128
   local mbc = 0
@@ -547,6 +548,8 @@ function GB.new(cfg)
   local rumble = (cartType >= 28 and cartType <= 30)
   local hasRTC = (cartType == 15 or cartType == 16)
   local hasBattery = BATTERY[cartType] or false
+  -- a 2K chip (header 0x01) answers all over 0xA000-0xBFFF, its 2K repeated
+  local ramSpan = (rom0[0x149] == 1) and 0x800 or 0x2000
 
   local title = {}
   for i = 0x134, 0x142 do
@@ -577,6 +580,22 @@ function GB.new(cfg)
   end
   local extb = ext[0]
   local ramEnable, ramSel, romBank, romHi, mbcMode = false, 0, 1, 0, 0
+  -- a cartridge with RAM and no bank controller (types 0x08, 0x09) has nothing to switch it on: it is always there
+  local ramFixed = (mbc == 0 and ramBanks > 0)
+  if ramFixed then ramEnable = true end
+  -- MBC1: the two high bits go to the upper ROM window in both modes; in the second mode they also choose the lower
+  -- ROM window (banks 0x00/0x20/0x40/0x60) and the RAM bank. Worked out afresh after every register write.
+  local function mbc1Map()
+    local hi = romHi * 32
+    romb = bank(hi + romBank)
+    if mbcMode == 1 then
+      romLo = bank(hi)
+      extb = ext[ramBanks > 0 and (romHi % ramBanks) or 0]
+    else
+      romLo = rom0
+      extb = ext[0]
+    end
+  end
   local saveDirty = false
   local extGen = 0                    -- bumped on every save-RAM write (lets rewind share unchanged copies)
 
@@ -767,14 +786,13 @@ function GB.new(cfg)
       elseif addr < 0x4000 then
         romBank = v % 32
         if romBank == 0 then romBank = 1 end
-        romb = bank(romHi * 32 + romBank)
+        mbc1Map()
       elseif addr < 0x6000 then
         romHi = v % 4
-        if mbcMode == 1 and ramBanks > 0 then extb = ext[romHi % ramBanks]
-        else romb = bank(romHi * 32 + romBank) end
+        mbc1Map()
       else
         mbcMode = v % 2
-        if mbcMode == 0 then extb = ext[0] end
+        mbc1Map()
       end
     elseif mbc == 2 then
       if addr < 0x4000 then
@@ -792,7 +810,7 @@ function GB.new(cfg)
     if mbc == 3 and ramSel >= 8 then return rtcLatch[ramSel] or 255 end
     if ramBanks == 0 then return 255 end
     if mbc == 2 then return extb[(addr - 0xA000) % 512] % 16 + 240 end
-    return extb[addr - 0xA000]
+    return extb[(addr - 0xA000) % ramSpan]
   end
 
   local function extWrite(addr, v)
@@ -803,13 +821,13 @@ function GB.new(cfg)
     end
     if ramBanks == 0 then return end
     if mbc == 2 then extb[(addr - 0xA000) % 512] = v % 16
-    else extb[addr - 0xA000] = v end
+    else extb[(addr - 0xA000) % ramSpan] = v end
     saveDirty = true
     extGen = extGen + 1
   end
 
   rd = function(addr)
-    if addr < 0x4000 then return rom0[addr]
+    if addr < 0x4000 then return romLo[addr]
     elseif addr < 0x8000 then return romb[addr - 0x4000]
     elseif addr >= 0xC000 then
       if addr < 0xD000 then return wram0[addr - 0xC000]
@@ -2047,9 +2065,9 @@ function GB.new(cfg)
     ramEnable, ramSel, romBank, romHi, mbcMode, latchPrev = r[49], r[50], r[51], r[52], r[53], r[54]
     rtcLatch[8], rtcLatch[9], rtcLatch[10], rtcLatch[11], rtcLatch[12] = r[55], r[56], r[57], r[58], r[59]
     rtcBase, rtcHaltAt, joySel = r[60], r[61] or nil, r[62]
+    if ramFixed then ramEnable = true end
     if mbc == 1 then
-      romb = bank((mbcMode == 1) and romBank or (romHi * 32 + romBank))
-      extb = ext[(mbcMode == 1 and ramBanks > 0) and (romHi % ramBanks) or 0]
+      mbc1Map()
     else
       romb = bank(romBank)
       if ramBanks > 0 then
@@ -2116,20 +2134,34 @@ function GB.new(cfg)
     end
   end
 
-  function m.loadState(st)
+  -- every block a state holds, and its length
+  local BLOCKS = { vram0 = 0x2000, vram1 = 0x2000, oam = 0xA0, hram = 0x80, io = 0x80, bgpd = 64, obpd = 64 }
+  for i = 0, 7 do BLOCKS["w" .. i] = 0x1000 end
+  -- Checks the whole state before anything is changed: false and a reason, and the machine is as it was.
+  local function stateFits(st)
     if type(st) ~= "table" or st.v ~= 1 or type(st.r) ~= "table" or type(st.m) ~= "table" then
       return false, "not a save state"
     end
     local mm, r = st.m, st.r
-    for _, key in ipairs({ "vram0", "vram1", "oam", "hram", "io", "bgpd", "obpd", "w0", "w7" }) do
+    for key, n in pairs(BLOCKS) do
       if type(mm[key]) ~= "string" then return false, "save state is incomplete" end
+      if #mm[key] ~= n then return false, "save state is damaged" end
     end
-    if #mm.vram0 ~= 0x2000 or #mm.w0 ~= 0x1000 or #r < 62 then return false, "save state is damaged" end
     for i = 0, ramBanks - 1 do
       if type(mm["x" .. i]) ~= "string" or #mm["x" .. i] ~= 0x2000 then
         return false, "save state is from a different game"
       end
     end
+    local now = {}                                   -- (the registers as this machine has them: each value of the same kind)
+    add(now, getCpu()) add(now, getClk()) add(now, getPpu()) add(now, getMbc())
+    if #r < #now then return false, "save state is damaged" end
+    for i = 1, #now do
+      if type(r[i]) ~= type(now[i]) or (type(r[i]) == "number" and r[i] ~= r[i]) then return false, "save state is damaged" end
+    end
+    return true
+  end
+  local function restore(st)
+    local mm, r = st.m, st.r
     setCpu(r)
     setClk(r)
     setPpu(r)
@@ -2141,6 +2173,14 @@ function GB.new(cfg)
     link.at = HUGE
     if io[2] >= 128 and (io[2] % 2 == 1 or link.clock) then link.at = clk + 4096 end
     resched()
+  end
+  function m.loadState(st)
+    local fits, why = stateFits(st)
+    if not fits then return false, why end
+    -- (checked through; should putting it in still fail, the machine is put back exactly as it was)
+    local before = m.saveState()
+    local ok, err = pcall(restore, st)
+    if not ok then restore(before) return false, "save state is damaged (" .. tostring(err) .. ")" end
     return true
   end
 

@@ -177,7 +177,8 @@ local strangers = {}      -- players met through the realm channel, not added as
 local realm = { num = 0, sent = 0, heard = {}, joins = 0 }   -- the realm channel: its number here, and what went on there
 -- "on" (share and see), "watch" (see, unseen), "off", or nil (not asked yet)
 -- (a stable build: the realm is not offered yet, and nobody is asked)
-local function realmMode() if not MB.Alpha() then return "off" end return MB.Opt("realm", nil) end
+local function realmMode() if not MB.Alpha() or (MB.PlayMode and MB.PlayMode() ~= "open") then return "off" end return MB.Opt("realm", nil) end   -- (the realm only when playing Open)
+local function solo() return MB.PlayMode and MB.PlayMode() == "solo" end
 local NOT_YET = "Playing with everyone on the realm is still being tested and comes in a later version. Friends you add with /mb together <name> work now."
 local function realmShare() return realmMode() == "on" end
 local function realmShow() local r = realmMode() return r == "on" or r == "watch" end
@@ -251,6 +252,7 @@ local function camera(s)
 end
 
 local function send(text)
+    if solo() then return end                         -- (How I play: Solo shares nothing)
     local done, now = {}, GetTime()
     if realmShare() and GetChannelName then           -- (looked up fresh: a stale number was refused as "bad channel")
         local n = GetChannelName(REALM_CHANNEL)
@@ -402,7 +404,7 @@ local function prune(g, now)
 end
 function G.Heard(text, channel, sender)
     if text:sub(1, 3) == "GP;" then G.ProbeHeard(text, channel, sender) return end
-    if not on then return end
+    if not on or solo() then return end
     local viaRealm = channel == "CHANNEL"
     local now = GetTime()
     if viaRealm then
@@ -1031,7 +1033,8 @@ function G.Moving()
     return busy
 end
 
--- A pressed while my trainer faces a friend's ghost on the next tile: say how to trade or battle with them
+-- A pressed while my trainer faces a friend's ghost on the next tile: in Emerald, FireRed and LeafGreen, offer a trade
+-- right there (GBA/Trade3.lua); in the other games, say how to trade or battle with them
 local DIR_OF = { [1] = { 0, 1 }, [2] = { 0, -1 }, [3] = { -1, 0 }, [4] = { 1, 0 } }
 function G.Pressed(button)
     if not on or not prof or not me or not me.map then return end
@@ -1042,7 +1045,17 @@ function G.Pressed(button)
         if g.skey == mk and g.sx == tx and g.sy == ty then
             if not g.toldAt or GetTime() - g.toldAt > 10 then
                 g.toldAt = GetTime()
-                Print(("This is %s. To trade or battle: /mb link %s (they answer with /mb link), then both of you go to the link desk."):format(g.name, g.name))
+                local T3 = MB.Trade3
+                if kind == "gba" and T3 and T3.Supported() and MB.Friends and MB.Friends.Ask then
+                    local name = g.name
+                    local s = MB.Link.Session and MB.Link.Session()
+                    local linked = s and s.state == "linked" and MB.Link.NameIs(s.partner, name)
+                    MB.Friends.Ask("together", ("|cffffd100%s|r is here.\nTrade Pokemon or battle right where you stand?%s"):format(name,
+                        linked and "" or " (MekkaBoy links you first: they get a pop-up.)"), "Trade", "Not now", function() T3.Request(name) end, nil, 30,
+                        "Battle", function() T3.Request(name, nil, "battle") end)
+                else
+                    Print(("This is %s. To trade or battle: /mb link %s (they answer with /mb link), then both of you go to the link desk."):format(g.name, g.name))
+                end
             end
             return
         end
@@ -1114,12 +1127,57 @@ end
 
 -- ---- friends ----
 local function saved() local db = MB.DB() db.ghostFriends = db.ghostFriends or {} return db.ghostFriends end
+-- Who answered: the friends kept from earlier sessions are told about in one line, once all of them have answered or
+-- been asked four times (about a minute); a friend just added, or one who comes online later, gets a line of their own.
+local roll = { yes = {}, no = {} }
+local NOT_REACHED = "offline, the other faction, or a MekkaBoy older than 0.16.1"
+local function names(list)
+    if #list <= 4 then
+        if #list == 1 then return list[1] end
+        return table.concat(list, ", ", 1, #list - 1) .. " and " .. list[#list]
+    end
+    return table.concat(list, ", ", 1, 3) .. (" and %d more"):format(#list - 3)
+end
+local function flushRoll()
+    if roll.done then return end
+    roll.done = true
+    local yes, no = roll.yes, roll.no
+    table.sort(yes) table.sort(no)
+    if #yes == 0 and #no == 0 then return end
+    local line = "Together: "
+    if #yes > 0 then line = line .. "your walk reaches " .. names(yes) .. "." end
+    if #no > 0 then
+        line = line .. (#yes > 0 and " Not answering yet (" or "no friends answering yet (") .. NOT_REACHED .. "): "
+            .. names(no) .. ". /mb together why shows each one."
+    end
+    Print(line)
+end
+local function heard(f, yes)
+    if f.fresh or roll.done then
+        if yes then Print(("%s's MekkaBoy answered: your walk reaches them."):format(f.name))
+        else Print(("%s has not answered yet: %s. Your walk is not reaching them."):format(f.name, NOT_REACHED)) end
+        return
+    end
+    if yes then        -- (answered after all, before the line went out)
+        for i = #roll.no, 1, -1 do if roll.no[i] == f.name then table.remove(roll.no, i) end end
+    end
+    local list = yes and roll.yes or roll.no
+    list[#list + 1] = f.name
+    if not roll.started then
+        roll.started = true
+        if C_Timer and C_Timer.After then C_Timer.After(75, flushRoll) end     -- (in case someone is never settled)
+    end
+    for _, o in pairs(friends) do
+        if o.askedAt and not o.fresh and not (o.saidYes or o.saidNo) then return end
+    end
+    flushRoll()
+end
 function G.Ask(f)
     f.askedAt = GetTime()
     f.asks = (f.asks or 0) + 1
     if f.asks == 4 and not f.spelling and not f.saidNo then
         f.saidNo = true
-        Print(("%s has not answered yet: offline, the other faction, or a MekkaBoy older than 0.16.1. Your walk is not reaching them."):format(f.name))
+        heard(f, false)
     end
     MB.Link.Resolve(f.name, function(spelling, theirs)
         local first = not f.spelling
@@ -1128,7 +1186,7 @@ function G.Ask(f)
         if not friends[k] then alias[k] = MB.Link.Plain(f.name) end    -- (their messages carry this spelling)
         if first and not f.saidYes then
             f.saidYes = true
-            Print(("%s's MekkaBoy answered: your walk reaches them."):format(f.name))
+            heard(f, true)
         end
     end, f.unit)
     f.unit = nil
@@ -1138,7 +1196,7 @@ local function addFriend(name, unit)
     local f = friends[key] or { name = name }
     friends[key] = f
     saved()[key] = name
-    f.unit = unit
+    f.unit, f.fresh = unit, true          -- (just added: told about on their own)
     G.Ask(f)
     return f
 end
@@ -1289,6 +1347,7 @@ function G.Question() return question end      -- (for tests)
 -- (GB/Console.lua, as a game starts: true when the question is up and the game should wait for the answer)
 function G.AskFirst(resume)
     if not prof or realmMode() ~= nil then return false end
+    if MB.Onboarded and not MB.Onboarded() then return false end      -- (the first-time questions answer this: UI/Onboarding.lua)
     ask(resume)
     return true
 end
@@ -1377,6 +1436,10 @@ end
 local function together(rest)
     rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local word = rest:lower()
+    if solo() and not (word == "off" or word == "why" or word == "list" or word == "help" or word:sub(1, 7) == "forget " or word:sub(1, 8) == "unblock " or word:sub(1, 6) == "block ") then
+        Print("You are playing Solo, so Together is off. /mb play friends (or open) turns it back on.")
+        return
+    end
     if word == "realm" or word:sub(1, 6) == "realm " then
         if not MB.Alpha() then Print(NOT_YET) return end
         local what = word:sub(7)
@@ -1468,7 +1531,11 @@ function G.TopAt(x, y)    -- (for tests: is the map's top layer solid at this sc
     local top = topLayer()
     return top and top(x, y) or false
 end
+function G.PlayModeChanged()     -- (How I play changed: Solo says goodbye to friends at once and stops drawing them)
+    if solo() then pcall(G.SayBye) ghosts, dirty = {}, true end
+end
 function G.Why()          -- (for tests and /mb together why: what stops friends being drawn now)
+    if solo() then return "off: you are playing Solo (/mb play friends or open turns it back on)" end
     if not on then return failed and "off (after an error)" or "off" end
     if not prof then return m and "not a game Together knows" or "no Pokemon game running" end
     local s = me

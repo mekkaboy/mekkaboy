@@ -2,7 +2,7 @@
 ## Title: MekkaBoy
 ## Notes: A Game Boy, Game Boy Color and Game Boy Advance emulator. /mb to open it.
 ## Author: MekkaLabs
-## Version: 0.20.1-beta
+## Version: 0.21.0-beta
 ## IconTexture: Interface\AddOns\MekkaBoy\Art\icon
 ## AddonCompartmentFunc: MekkaBoy_OnAddonCompartmentClick
 ## SavedVariables: MekkaBoyDB
@@ -21,15 +21,24 @@ GB\Link.lua
 Hello.lua
 GB\Lobby.lua
 GB\Console.lua
+Friends.lua
 GB\Bench.lua
 GBA\Core.lua
 GBA\Cable.lua
 GBA\Screen.lua
 GBA\Ghosts.lua
+GBA\Trade3.lua
+DexRead.lua
+Dex.lua
+DexIcons.lua
+Card.lua
 GB\Native.lua
 GBA\TestedList.lua
 GBA\Tested.lua
 UI\Minimap.lua
 UI\Options.lua
+UI\Friends.lua
+UI\Card.lua
+UI\Onboarding.lua
 UI\Bug.lua
 UI\KeyDrawer.lua
