@@ -170,6 +170,25 @@ function Friends.Heard(text, channel, sender)
     end
 end
 
+-- My game changed (another cartridge, or the console closed): the players I heard from in the last few minutes still
+-- have my old game noted, and would answer a link from it ("a game that can't link with yours"). Tell them the new one,
+-- once things settle: the same one-line hello as when asked, and only to those How I play would answer anyway.
+local RETELL_WITHIN = 600
+local retellAt
+function Friends.GameChanged()
+    if share() == "off" then return end
+    local at = now()
+    retellAt = at
+    local function go()
+        if retellAt ~= at then return end                    -- (a later change: that one tells)
+        local line = me()
+        for _, p in pairs(peers) do
+            if now() - p.at < RETELL_WITHIN and (share() == "everyone" or known(p.name)) then send(line, "WHISPER", p.name) end
+        end
+    end
+    if C_Timer and C_Timer.After then C_Timer.After(3, go) else go() end
+end
+
 function Friends.Peer(name)
     local p = name and peers[plain(name)]
     if p and now() - p.at > PEER_TTL then peers[plain(name)] = nil return nil end
@@ -239,6 +258,13 @@ function Friends.Invited(sender, family, via, id)
     if inv and inv.id == id and MB.Link.NameIs(inv.sender, sender) and now() - inv.at < INVITE_SHOWN then return end
     if calling and MB.Link.NameIs(calling.name, sender) then return end       -- (we asked them too: Link sorts out who leads)
     Friends.invite = { sender = sender, family = family, via = via, id = id, at = now() }
+    -- (the invitation says which kind of game they are on now; what they told us earlier may be another game, put
+    -- away since: theirs wins, and they are asked for the rest, so the pop-up never answers from the old game)
+    local p = Friends.Peer(sender)
+    if p and family and family ~= "" and p.family ~= family then
+        p.family, p.game = family, ""
+        askName(sender, "refresh")
+    end
     if Friends.ShowInvite then Friends.ShowInvite(Friends.invite) end
 end
 function Friends.Accept()

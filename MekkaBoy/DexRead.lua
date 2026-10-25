@@ -441,7 +441,7 @@ do
     end
     perm({}, { "G", "A", "E", "M" })
 end
--- one 80-byte record (box form): species (the game's internal number), egg, nickname; nil if empty or damaged
+-- one 80-byte record (box form): species (the game's internal number), egg, nickname, held item; nil if empty or damaged
 local function mon3(s, o)
     local pid, ot = u32(s, o), u32(s, o + 4)
     local flags = u8(s, o + 19)
@@ -461,8 +461,9 @@ local function mon3(s, o)
     local species = w[at.G] % 65536
     if species == 0 then return nil end
     local egg = floor(w[at.M + 1] / 1073741824) % 2 == 1 or floor(flags / 4) % 2 == 1
-    return { raw = species, egg = egg or nil, nick = not egg and text(s, o + 8, 10, G3, 0xFF) or nil }
+    return { raw = species, egg = egg or nil, nick = not egg and text(s, o + 8, 10, G3, 0xFF) or nil, item = floor(w[at.G] / 65536) }
 end
+R.Mon3 = mon3          -- (the team preview reads the running game's party with it: GBA/Team3.lua)
 local function read3(save, code)
     if type(save) ~= "table" or type(save.sectors) ~= "table" then return nil, "no save" end
     local sec = pickSlot(save)

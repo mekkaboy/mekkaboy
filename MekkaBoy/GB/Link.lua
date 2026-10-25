@@ -653,7 +653,10 @@ local function family()
     if f == "native" then return "native:" .. gameCode() end
     return f
 end
-local function short(name) return (tostring(name):gsub("%-[^%-]*$", "")) end
+-- a name as shown: the realm left off, and each word written the way WoW writes names (first letter capital, the rest
+-- small), whatever way it was typed ("ana lyse" shows as "Ana Lyse"; letters past plain A to Z as typed)
+local function pretty(name) return (name:gsub("(%S)(%S*)", function(a, b) return a:upper() .. b:lower() end)) end
+local function short(name) return pretty((tostring(name):gsub("%-[^%-]*$", ""))) end
 Link.Short = short
 function Link.Family() return family() end            -- (what the game in the console links as: Friends.lua says it to others)
 local function friendsSay(what, ...) if MB.Friends and MB.Friends[what] then pcall(MB.Friends[what], ...) end end
@@ -735,7 +738,7 @@ local NOTES = {
     follow = function() return nil end,
     room = function(s)
         if s.host then return "Pick the room. Your choice counts for both of you." end
-        return ("%s picks the room: your A and B buttons wait until they have."):format(short(s.partner))
+        return ("%s is picking the room. Your A and B buttons are paused until they choose."):format(short(s.partner))
     end,
     -- the Advance games
     there = function(s)
@@ -748,10 +751,10 @@ local NOTES = {
     joined = function(s)
         if s.saidJoined then return nil end
         s.saidJoined = true
-        return "The two games are linked. The link is slower than a real cable: give each step a few seconds."
+        return "The two games are linked. You can now trade and battle."
     end,
     capsule = function(s)
-        return ("%s's Time Capsule takes you to the Trade Center: your A and B buttons wait until it has."):format(short(s.partner))
+        return ("%s's Time Capsule will take you to the Trade Center. Your A and B buttons are paused until it does."):format(short(s.partner))
     end,
 }
 
@@ -895,13 +898,9 @@ local function linked(partner, id, host, fam, peer, route)
     local mixed = (session.peer ~= fam)
     if route then record(s, "over whispers to " .. tostring(route.target)) end
     if isNative(fam) then
-        Print(("Linked with %s. Your games can see each other now%s."):format(short(partner), host and " (you lead)" or ""))
+        Print(("Linked with %s. Your games are now connected%s."):format(short(partner), host and " (you lead)" or ""))
     elseif fam == "gen3" then
-        if host then
-            Print(("Linked with %s. Each of you: talk to %s. Your game will ask you to confirm once it sees theirs."):format(short(partner), desk(fam)))
-        else
-            Print(("Linked with %s. Each of you: talk to %s. Their game confirms the link."):format(short(partner), desk(fam)))
-        end
+        Print(("Linked with %s. Type /mb trade or /mb battle to trade or battle right where you stand."):format(short(partner)))
     elseif host then
         if mixed and fam == "gen2" then
             Print(("Linked with %s, who is playing an older game. You lead: talk to the Time Capsule receptionist upstairs in a Pokemon Center first."):format(short(partner)))
@@ -975,7 +974,7 @@ local function seated(s, k)
         lost = function() if session == s then unlink(("The link with %s's table went quiet and was closed. /mb link starts again."):format(short(s.partner))) end end,
     })
     record(s, ("seated: %d"):format(k))
-    Print(("You sit down at %s's table. Your games can see each other now."):format(short(s.partner)))
+    Print(("You sit down at %s's table. Your games are now connected."):format(short(s.partner)))
     plug()
 end
 
@@ -1017,13 +1016,13 @@ ticker:SetScript("OnUpdate", function()
             if s.ghost then s.ghost.partnerAway = away > AWAY_HOLD end
             if away > AWAY_TELL and not s.toldAway then
                 s.toldAway = true
-                Print(("%s's game has stopped (paused, a loading screen, or gone offline). Yours waits for it, so that nothing happens on one side only."):format(short(s.partner)))
+                Print(("%s's game paused. Yours waits until it's back."):format(short(s.partner)))
             elseif away <= AWAY_HOLD and s.toldAway then
                 s.toldAway = false
                 Print(("%s's game is back; both carry on."):format(short(s.partner)))
             end
             if away > AWAY_CLOSE then
-                unlink(("%s's game has not come back for a minute, so the link is closed. If your game shows a communication error, type /mb reset to restart it from your save: a trade only counts once both games have saved it."):format(short(s.partner)), true)
+                unlink(("%s's game didn't come back, so the link closed. If your game shows a communication error, /mb reset restarts it from your save."):format(short(s.partner)), true)
                 return
             end
         end
@@ -1045,8 +1044,13 @@ ticker:SetScript("OnUpdate", function()
         end
     elseif s.state == "calling" then                 -- (no party: whispering every spelling of their name)
         local t = clockNow()
-        if t - s.since > INVITE_FOR then
-            unlink(("%s did not answer. They need MekkaBoy open with a game running, to be online, and (probably) your faction; then they type /mb link."):format(short(s.partner)))
+        -- (the server has said, for every spelling of the name, that nobody by it is online: no use calling on)
+        local gone = #s.candidates > 0
+        for _, name in ipairs(s.candidates) do if not Link.Unreachable(name) then gone = false break end end
+        if gone and t - s.since > 2 then
+            unlink(("Nobody named %s is online on your side. Check the spelling; players on the other faction can't link with you."):format(short(s.partner)))
+        elseif t - s.since > INVITE_FOR then
+            unlink(("%s didn't answer. They need to be online, on your faction, with MekkaBoy open and a game running; then they type /mb link."):format(short(s.partner)))
         elseif t - s.lastInvite >= INVITE_EVERY then
             s.lastInvite = t
             for k, name in ipairs(s.candidates) do if not Link.Unreachable(name) then send("LV" .. string.char(s.id, k, MB.PROTOCOL) .. s.family, "WHISPER", name) end end
@@ -1136,7 +1140,7 @@ local function heardWhisper(text, sender)
         friendsSay("Invited", sender, fam, "whisper", id)
         if tell then
             toldInvite[key] = clockNow()
-            Print(("%s wants to link MekkaBoys with you (no party needed). Start your game and type /mb link %s to answer."):format(short(sender), short(sender)))
+            Print(("%s wants to link MekkaBoys with you. Start your game and type /mb link %s to answer."):format(short(sender), short(sender)))
         end
     elseif kind == "LB" then
         local k, j, proto, fam = text:byte(4), text:byte(5), text:byte(6), text:sub(7)
@@ -1284,6 +1288,7 @@ function Link.MachineChanged(m)
     if now == machine then return end
     machine = now
     if session and session.state == "linked" then plug() end
+    friendsSay("GameChanged")
 end
 -- Should the Advance game be held still this frame? (see GBA/Cable.lua)
 function Link.Waiting()
@@ -1324,7 +1329,7 @@ local function callByName(who)
     session = { id = math.random(1, 120), host = true, state = "calling", family = fam, candidates = cands, partner = cands[1],
                 since = clockNow(), lastInvite = -100 }
     ticker:Show()
-    Print(("Calling %s (no party needed). They type /mb link to answer: they need MekkaBoy open with a game running."):format(short(cands[1])))
+    Print(("Calling %s. They can type /mb link to answer: they need MekkaBoy open with a game running to link."):format(short(cands[1])))
 end
 
 function Link.Open(who)
@@ -1417,7 +1422,7 @@ function Link.Open(who)
     end
     session = { id = math.random(1, 120), host = true, state = "inviting", family = fam, since = clockNow(), lastInvite = -100 }
     ticker:Show()
-    Print("Looking for another MekkaBoy in your party. The other player types /mb link too.")
+    Print("Looking for another MekkaBoy in your party. The other player must send /mb link too.")
 end
 
 function Link.Close()
@@ -1491,6 +1496,10 @@ do
         return a == b .. r or b == a .. r
     end
     Link.SameSpelling = sameSpelling
+    -- (the server can write the name back differently from how it was whispered: a whisper to "First-Last" comes back
+    -- as "No player named 'first last'". When no spelling whispered matches exactly, the one that matches with its
+    -- hyphens read as spaces is the one the line is about)
+    local function loose(x) return (x:lower():gsub("%-", " ")) end
     local function ours(msg)
         if type(msg) ~= "string" then return false end
         local name = msg:match(pattern)
@@ -1500,18 +1509,40 @@ do
             if GetTime() - t > 10 then whispered[w] = nil
             elseif sameSpelling(w, name) then unreachable[w] = GetTime() hit = true end
         end
+        if not hit then
+            for w in pairs(whispered) do
+                -- (or only its first word: a whisper to "Imron Burgundy" can come back as "No player named 'Imron'")
+                local first = loose(w):match("^(%S+) ")
+                if loose(w) == loose(name) or (first and first == loose(name)) then unreachable[w] = GetTime() hit = true end
+            end
+        end
         return hit
     end
     Link.NotFoundLine = ours
     local seen = CreateFrame("Frame")                -- (noted even when no chat window shows system lines)
     seen:RegisterEvent("CHAT_MSG_SYSTEM")
     seen:SetScript("OnEvent", function(_, _, msg) pcall(ours, msg) end)
-    if ChatFrame_AddMessageEventFilter then          -- (and kept out of the chat windows)
-        ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(_, _, msg)
+    -- (a note of what happened to these lines, kept with the saved settings: QA saw some reach the chat window)
+    local function note(name, hidden)
+        local db = MB.DB()
+        local n = db.notFoundLines or { seen = 0, hidden = 0 }
+        db.notFoundLines = n
+        n.seen, n.hidden = (n.seen or 0) + 1, (n.hidden or 0) + (hidden and 1 or 0)
+        if not hidden then
+            local w = {}
+            for k, t in pairs(whispered) do w[#w + 1] = ("%s@%.0f"):format(k, GetTime() - t) end
+            n.lastShown = { name = name, whispered = table.concat(w, ", "), at = date and date("%H:%M:%S") or "" }
+        end
+    end
+    local addFilter = ChatFrame_AddMessageEventFilter or (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter)
+    if addFilter then                                -- (and kept out of the chat windows)
+        addFilter("CHAT_MSG_SYSTEM", function(_, _, msg)
             if type(msg) ~= "string" or not msg:match(pattern) then return false end
             local name = msg:match(pattern)
-            for w in pairs(unreachable) do if GetTime() - unreachable[w] < 10 and nameIs(w, name) then return true end end
-            return ours(msg)
+            for w in pairs(unreachable) do if GetTime() - unreachable[w] < 10 and nameIs(w, name) then pcall(note, name, true) return true end end
+            local hide = ours(msg)
+            pcall(note, name, hide)
+            return hide
         end)
     end
 end

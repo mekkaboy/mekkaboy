@@ -103,8 +103,8 @@ local function updateGauge()
     local elapsed = GetTime() - flight.start
     local total = flight.known or flight.guess
     if not total then
-        -- first time on this route: no countdown yet, so show time in the air
-        MB.SetFlight(clockText(elapsed) .. (flight.key and " (timing)" or ""), nil)
+        -- first time on this route: it's being timed for next time, and nothing shows until there is a countdown
+        MB.SetFlight(nil, nil)
         return
     end
     local left = total - elapsed
@@ -255,7 +255,7 @@ events:SetScript("OnEvent", function(_, event, a1, a2)
         -- Say hello once, then stay out of the chat window for good.
         if not db.introShown then
             db.introShown = true
-            Print("installed. Type /mb to play; it also opens by itself on flight paths.")
+            Print("Welcome to MekkaBoy! To add your own games, type /mb setup. Type /mb to play; it also opens by itself on flight paths.")
         end
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- Combat: put the console away without a word (the game pauses and is

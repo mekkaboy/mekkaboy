@@ -1,8 +1,9 @@
 -- The key drawer: a strip that slides out from under the console (or the Minimal window, dressed to match it) and says which keyboard key works each
 -- button, from the player's own bindings (/mb bind). It is not part of the console's size: closed, there is
--- nothing; open, it hangs below the body. The ? button on the console opens and closes it, and it opens by
--- itself the very first time the console does, so a new player sees the keys once. Open or closed is kept.
+-- nothing; open, it hangs below the body. The ? button on the console opens and closes it; it starts closed (a line in
+-- chat says where it is the first time). Open or closed is kept.
 local _, MB = ...
+local Print = MB.Print
 
 local win = MB.window
 local W, ROW, PAD = 560, 18, 12
@@ -104,6 +105,8 @@ local function set(i, name, keys, dim)
     local n, k = dim and ink.dim or ink.name, dim and ink.dim or ink.keys
     c.name:SetTextColor(n[1], n[2], n[3], n[4] or 1)
     c.keys:SetTextColor(k[1], k[2], k[3], k[4] or 1)
+    local shade = glassy() and MB.GlassShadow
+    if shade then shade(c.name) shade(c.keys) else c.name:SetShadowColor(0, 0, 0, 1) c.keys:SetShadowColor(0, 0, 0, 1) end
 end
 
 -- fills the cells; L/R are dimmed for a Game Boy game, rewind for an Advance game
@@ -151,13 +154,22 @@ function MB.SetKeyDrawer(open, keep)
         slideAt = nil
         drawer:Hide()
     end
-    if keep ~= false then MB.DB().opt.keyDrawer = open and true or false end
+    if keep ~= false then MB.DB().opt.keysOpen = open and true or false end
 end
 function MB.ToggleKeyDrawer() MB.SetKeyDrawer(not drawer:IsShown()) end
 
--- with the console: as it was left, and open the first time ever
+-- with the console: as the player left it; closed until they open it with the ? button (it used to open by itself the
+-- first time, and stayed open for everyone who never found the ?: a new setting, so that starts closed for them too).
+-- The first time, one line in chat says where the controls are.
 win:HookScript("OnShow", function()
-    local want = MB.Opt("keyDrawer", nil)
-    if want == nil then want = true end
-    MB.SetKeyDrawer(want)
+    local want = MB.Opt("keysOpen", nil)
+    if want == nil then
+        want = false
+        local opt = MB.DB().opt
+        if not opt.keysHinted then
+            opt.keysHinted = true
+            Print("The ? button at the top of the console shows the controls (/mb keys lists them).")
+        end
+    end
+    MB.SetKeyDrawer(want, false)
 end)

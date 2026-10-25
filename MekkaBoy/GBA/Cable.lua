@@ -371,7 +371,38 @@ end
 function Ghost:busy() return self.phase == "data" end
 function Ghost:blocksKey() return false end
 
+-- Battle animations. Over chat, a link battle with the game's Battle Scene option on stalls on "Link standby..." (every
+-- animation is waited on by both sides, and the waits never line up), so while a Pokemon game is plugged into the link the
+-- option is switched off, and put back as it was when it is unplugged. Where the game keeps it: SaveBlock2 + 0x14, a
+-- 16-bit field whose 0x400 bit is "Battle Scene: Off" (byte +0x15, bit 0x04). Emerald, FireRed and LeafGreen keep a
+-- pointer to SaveBlock2 (it moves); Ruby and Sapphire keep it in one place.
+local SB2 = { BPEE = { ptr = 0x03005D90 }, BPRE = { ptr = 0x0300500C }, BPGE = { ptr = 0x0300500C },
+              AXVE = { at = 0x02024EA4 }, AXPE = { at = 0x02024EA4 } }
+local function sceneByte(m)
+    local e = SB2[codeOf(m)]
+    if not e then return nil end
+    local a = e.at or m.rd32(e.ptr)
+    if not a or a < 0x02000000 or a >= 0x0203F000 then return nil end
+    return a + 0x15
+end
+local function scenesOff(g)
+    local a = sceneByte(g.m)
+    if not a then return end
+    local b = g.m.rd8(a)
+    if floor(b / 4) % 2 == 0 then g.m.wr8(a, b + 4) g.scenesWereOn = true end
+end
+local function scenesBack(g)
+    if not g.scenesWereOn then return end
+    g.scenesWereOn = nil
+    local a = sceneByte(g.m)
+    if not a then return end
+    local b = g.m.rd8(a)
+    if floor(b / 4) % 2 == 1 then g.m.wr8(a, b - 4) end
+end
+Cable.SceneByte = sceneByte
+
 function Ghost:detach()
+    pcall(scenesBack, self)
     if self.localOn then
         self.localOn = false
         announce(self)
@@ -473,6 +504,7 @@ function Cable.Attach(m, opts)
                              phase = "off", localOn = false, remoteOn = false, round = opts.round or 0, remoteRound = 0, frame = 0, openedAt = 0 }, Ghost)
     reset(g)
     if g.host then attachParent(g) else attachChild(g) end
+    pcall(scenesOff, g)
     m.linkPlug(g.plug)
     announce(g)
     return g

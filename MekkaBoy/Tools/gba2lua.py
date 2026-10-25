@@ -124,7 +124,7 @@ def _convert(path, addons, cid=None, name=None, quiet=False):
         total += len(text)
         open(os.path.join(folder, 'rom%02d.lua' % (p + 1)), 'w', newline='\n', encoding='utf-8').write(text)
     toc = ['## Interface: 16001', '## Title: MekkaBoy Advance Cartridge - ' + toc_text(name),
-           '## Notes: A game for MekkaBoy Advance (experimental), made from your own copy. Not for sharing.',
+           '## Notes: A game for MekkaBoy Advance, made from your own copy. Not for sharing.',
            '## LoadOnDemand: 1', '## RequiredDeps: MekkaBoy', '## X-MekkaBoy-Cart: ' + cid, '## X-MekkaBoy-Name: ' + toc_text(name), '## X-MekkaBoy-System: gba',
            '## X-MekkaBoy-Code: %s-%d' % (label(rom)[1], label(rom)[2])]       # (which game this is, for the list of tried games)
     toc += ['rom%02d.lua' % i for i in range(PARTS + 1)]

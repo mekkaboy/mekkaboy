@@ -158,7 +158,7 @@ function Carts.Load(id)
         Carts.Adopt(id, e.name, e.numBanks, e.cgb, banks)
         return roms[id]
     end
-    return nil, "The cartridge is damaged: some of its files are missing. Run Tools/rom2lua.py on the game again."
+    return nil, "The cartridge is damaged: some of its files are missing. Make it again at workshop.mekkaboy.com."
 end
 
 -- Saved settings (which list the pasted games) arrive after this file has run.

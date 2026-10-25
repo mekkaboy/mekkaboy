@@ -33,6 +33,10 @@
 --   T?<info>  "trade here?"     T~  "heard you"     T+<info>  "yes"     T-<words>  "no, or can't"
 --   TG        "go" (from the player whose console leads the link)     TS  "started"     TX  "called off"
 --   info: <trainer id, 8 hex digits><game code, 4><revision, 1 digit><finished the story: 0 or 1>
+--   The team preview: T? carries "<info><t|b>#<team>" and T~ is "~#<team>", the asker's and the asked
+--   player's live party as GBA/Team3.lua encodes it (P1;...). An older MekkaBoy reads only what comes before the "#",
+--   so it asks and answers as before; a T? without a team gets the plain pop-up, and the asker is told when a T~
+--   comes without one (UI/Preview.lua shows both teams).
 -- Messages between the two MekkaBoys after a link (whispered, lane 5, kind "J"):
 --   J?00<trade>                      "did your game keep our trade?"
 --   J!00<trade>;<yes|no|unknown>
@@ -208,11 +212,14 @@ local function canStart(kind)
         return false, "Trading where you stand works in Pokemon Emerald, FireRed and LeafGreen."
     end
     if job or dt then return false, "A trade or battle is already being set up." end
+    -- (most often a link that ended mid-battle or mid-trade, the game still on that screen: say how to get out of it)
+    local stuck = rd8(prof.received) ~= 0 or rd8(prof.wireless) ~= 0
+    if T.dropped and not stuck and cb2() == prof.cb2 + 1 then T.dropped = nil end      -- (restarted, or back on the map)
+    if stuck or T.dropped then return false, "The game is still in a link that ended early. /mb reset restarts it from its save from just before (nothing is lost)." end
     if cb2() ~= prof.cb2 + 1 or cb1() ~= prof.cb1 + 1 then return false, "Stand on the map, out of any menu or battle, first." end
     if rd8(prof.locked) ~= 0 or rd8(prof.scriptStatus) ~= 2 then return false, "Close any menu and finish what's happening in the game first." end
     if rd8(prof.fade + 7) >= 128 then return false, "Wait for the screen to settle." end
     if prof.questLog and (rd8(prof.questLog) == 2 or rd8(prof.questLog) == 3) then return false, "Let the game finish its \"Previously on your quest\" first." end
-    if rd8(prof.received) ~= 0 or rd8(prof.wireless) ~= 0 then return false, "The game is already using the link." end
     if rd8(prof.differentFile) ~= 0 then return false, "Save your game once from its own menu first." end
     local av = rd8(prof.avatar)
     if av % 32 >= 2 then return false, (av % 32 >= 8) and "Get out of the water first." or "Get off your bike first." end
@@ -239,6 +246,41 @@ end
 local WORDS = { trade = { noun = "trade", screen = "trade screen", done = "Trade done" },
                 battle = { noun = "battle", screen = "battle", done = "Battle over" } }
 
+-- ------------------------------------------------------ the team preview ---
+-- (GBA/Team3.lua reads the running game's party; UI/Preview.lua shows both teams. Neither changes the game, the
+-- messages' order or their timing: the team rides along with T? and T~.)
+local ELL = "\226\128\166"
+local function myTeam()
+    local Tm = MB.Team3
+    if not (Tm and m) then return nil end
+    local ok, t = pcall(Tm.Live, m)
+    return ok and t or nil
+end
+local function teamText(team)
+    local Tm = MB.Team3
+    if not Tm then return "" end
+    local ok, txt = pcall(Tm.Encode, team or { mons = {} })
+    return (ok and txt) and ("#" .. txt) or ""
+end
+-- the team in a message, if it carries one: a team, or nil (an older MekkaBoy's message)
+local function teamIn(rest)
+    local at = (rest or ""):find("#P", 1, true)
+    if not at then return nil end
+    local Tm = MB.Team3
+    local ok, t = pcall(Tm and Tm.Decode or function() end, rest:sub(at + 1))
+    return (ok and t) or { mons = {} }
+end
+local function preview() return MB.Preview end
+local function hideAsk()
+    if MB.Friends and MB.Friends.HideAsk then MB.Friends.HideAsk("trade") end
+    local P = preview()
+    if P then pcall(P.Hide) end
+end
+local function showing(fields)
+    local P = preview()
+    if P and dt and dt.role == "ask" then pcall(P.Update, fields) end
+end
+
 -- ------------------------------------------------- trading where you stand ---
 local function tell(text) local g = wireOf() if g then g:tx("T", text:sub(2)) end end      -- (text: "T?...", the stand-in adds the kind)
 local function say(text) Print(text) if MB.Note then MB.Note(text:sub(1, 60)) end end
@@ -248,6 +290,11 @@ local function abort(why, quiet)
     if job then restore() end      -- (a save cut short: the save it was writing is not signed, so the last one stands)
     if was and not quiet then say(why) end
     if MB.Friends and MB.Friends.HideAsk then MB.Friends.HideAsk("trade") end
+    -- (the one asking sees why on the preview, with Close; anyone else's goes)
+    local P = preview()
+    if P then
+        if was and was.role == "ask" and not quiet then pcall(P.Finish, why) else pcall(P.Hide) end
+    end
 end
 -- the ordinary save first, the game held still from then until the trade screen (or until it is called off)
 local function saveThen(fn)
@@ -275,6 +322,7 @@ end
 local function start()
     local s, g = session(), wireOf()
     if not (dt and s and g) then return end
+    hideAsk()
     local host = s.host
     local group, map, x, y = place()
     dt.home = { group, map, x, y }
@@ -342,10 +390,18 @@ function T.Request(name, tries, kind)
     end
     dt = { role = "ask", stage = "saving", partner = s.partner, at = now(), kind = kind }
     say(("Saving your game, then asking %s to %s here..."):format(short(s.partner), kind))
+    dt.team = myTeam()
+    local P = preview()
+    if P then
+        pcall(P.Show, { role = "asking", kind = kind, partner = s.partner, mine = dt.team, theirsState = "waiting",
+                        status = "Saving your game first" .. ELL,
+                        onNo = function() if dt and dt.role == "ask" then T.Cancel() end end })
+    end
     saveThen(function()
         dt.mine = parseInfo(info())
         dt.stage, dt.at = "asking", now()
-        tell("T?" .. T.InfoText() .. (kind == "battle" and "b" or "t"))
+        tell("T?" .. T.InfoText() .. (kind == "battle" and "b" or "t") .. teamText(dt.team))
+        showing({ status = ("Waiting for %s's MekkaBoy%s"):format(short(dt.partner), ELL) })
     end)
 end
 function T.InfoText() return hex8(dt.mine.tid) .. dt.mine.code .. dt.mine.rev .. (dt.mine.story and "1" or "0") end
@@ -357,7 +413,7 @@ function T.Cancel()
 end
 
 local function answer(yes)
-    if MB.Friends and MB.Friends.HideAsk then MB.Friends.HideAsk("trade") end
+    hideAsk()
     local ask = T.asked
     T.asked = nil
     if not ask then return end
@@ -388,11 +444,20 @@ function T.Control(ghost, text)
     if not s then return end
     if what == "?" then
         if dt or job then tell("T-is setting up another trade or battle") return end
-        tell("T~")
+        local mine = prof and myTeam() or nil
+        tell("T~" .. (prof and teamText(mine) or ""))
         local theirs = parseInfo(rest)
         if not theirs then tell("T-couldn't read the request") return end
         if not prof then local _, why = canStart(theirs.kind) tell("T-" .. (why or "can't here")) Print(("%s asked to %s where you stand, but: %s"):format(short(s.partner), theirs.kind, why)) return end
         T.asked = { theirs = theirs, at = now() }
+        -- their MekkaBoy sent its team: the team preview, both teams side by side
+        local team = teamIn(rest)
+        local P = preview()
+        if team and P and pcall(P.Show, { role = "asked", kind = theirs.kind, partner = s.partner, game = NAMES[theirs.code] or theirs.code,
+                                         mine = mine or { mons = {} }, theirs = team, theirsState = "ok", seconds = 60,
+                                         onYes = function() answer(true) end, onNo = function() answer(false) end }) then
+            return
+        end
         local text2
         if theirs.kind == "battle" then
             text2 = ("|cffffd100%s|r wants to battle right where you both are (%s).\nYour Pokemon are healed for the battle and come back exactly as they were. Your game saves before the battle and again after it."):format(short(s.partner), NAMES[theirs.code] or theirs.code)
@@ -405,19 +470,30 @@ function T.Control(ghost, text)
             Print(text2:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. " /mb " .. theirs.kind .. " yes or no")
         end
     elseif what == "~" then
-        if dt then dt.heard = true end
+        if dt then
+            dt.heard = true
+            if dt.role == "ask" and dt.stage == "asking" then
+                local team = teamIn(rest)
+                showing({ theirs = team, theirsState = team and "ok" or "none", game = team and team.code and NAMES[team.code] or nil,
+                          status = ("Waiting for %s to answer%s"):format(short(dt.partner), ELL) })
+            end
+        end
     elseif what == "+" then
         if not (dt and dt.role == "ask" and dt.stage == "asking") then return end
         dt.theirs = parseInfo(rest)
         if not dt.theirs then abort("The trade answer couldn't be read.") return end
         dt.stage, dt.at = "ready", now()
         say(("%s said yes. Opening the %s..."):format(short(s.partner), WORDS[dt.kind].screen))
+        showing({ status = ("%s said yes. Opening the %s%s"):format(short(s.partner), WORDS[dt.kind].screen, ELL) })
         hostDecides()
     elseif what == "-" then
-        if T.asked then T.asked = nil if MB.Friends and MB.Friends.HideAsk then MB.Friends.HideAsk("trade") end end
-        if dt and dt.stage ~= "trading" then abort(("%s can't %s now: %s."):format(short(s.partner), dt.kind, rest ~= "" and rest or "no reason given")) end
+        if T.asked then T.asked = nil hideAsk() end
+        if dt and dt.stage ~= "trading" then
+            if rest == "said not now" then abort(("%s said not now."):format(short(s.partner)))
+            else abort(("%s can't %s now: %s."):format(short(s.partner), dt.kind, rest ~= "" and (rest:gsub("[%.%s]+$", "")) or "no reason given")) end
+        end
     elseif what == "X" then
-        if T.asked then local k = T.asked.theirs.kind T.asked = nil if MB.Friends and MB.Friends.HideAsk then MB.Friends.HideAsk("trade") end Print(short(s.partner) .. " called the " .. k .. " off.") end
+        if T.asked then local k = T.asked.theirs.kind T.asked = nil hideAsk() Print(short(s.partner) .. " called the " .. k .. " off.") end
         if dt and dt.stage ~= "trading" then abort(short(s.partner) .. " called the " .. dt.kind .. " off.") end
     elseif what == "G" then
         if not (dt and dt.stage == "ready" and not s.host) then tell("TX") return end
@@ -515,14 +591,24 @@ local function settleLive(ended)
     end
 end
 
+-- a link that ended mid-battle or mid-trade leaves the game on that screen: offer the way out as a button (the same
+-- as /mb reset: the game restarts from its save, which was kept just before), not only as a line in chat
+local function offerRestart(kind)
+    T.dropped = true
+    Print(("The link ended during the %s. /mb reset restarts your game from its save from just before it (nothing is lost)."):format(kind))
+    if MB.Friends and MB.Friends.Ask and MB.commands and MB.commands.reset then
+        MB.Friends.Ask("restart", ("The link ended during the %s.\nRestart from your save from just before it? Nothing is lost."):format(kind),
+            "Restart", "Not now", function() MB.commands.reset.run("") end, nil, 0)
+    end
+end
+T.OfferRestart = offerRestart
+
 -- the link ended (GB/Link.lua)
 function T.LinkEnded()
-    if T.asked then T.asked = nil if MB.Friends and MB.Friends.HideAsk then MB.Friends.HideAsk("trade") end end
+    if T.asked then T.asked = nil hideAsk() end
     if dt and dt.stage ~= "trading" then abort("The link ended, so the " .. dt.kind .. " was called off.")
     elseif dt then
-        if dt.stage == "trading" and (dt.kind == "battle" or not T.live) then
-            Print(("The link ended during the %s. /mb reset restarts your game from its save from just before it (nothing is lost)."):format(dt.kind))
-        end
+        if dt.stage == "trading" and (dt.kind == "battle" or not T.live) then offerRestart(dt.kind) end
         dt = nil
     end
     settleLive(true)
@@ -621,9 +707,8 @@ function T.Frame(machine)
             dt.stage = "back"
         elseif c == prof.linkError + 1 or c == prof.linkError2 + 1 then
             local k = dt.kind
-            dt = { kind = k }
-            Print(("The link broke during the %s. /mb reset restarts your game from its save (it was saved just before the %s)."):format(dt.kind, dt.kind))
             dt = nil
+            offerRestart(k)
         end
     elseif dt and dt.stage == "back" then
         if cb2() == prof.cb2 + 1 and rd8(prof.locked) == 0 then
@@ -726,5 +811,11 @@ end)
 -- (for tests)
 function T.State() return { dt = dt, job = job ~= nil, prof = prof, code = code, pending = pending, asked = T.asked } end
 T.CanStart = function(kind) return canStart(kind) end
+-- is the player free on the map right now (no menu, no message, no script, no other screen)? (GBA/Ghosts.lua: A on a
+-- friend's trainer offers Trade/Battle only then; A in the trade screen or the START menu is the game's own)
+function T.FreeOnMap()
+    if not (m and prof) then return nil end
+    return cb2() == prof.cb2 + 1 and cb1() == prof.cb1 + 1 and rd8(prof.locked) == 0 and rd8(prof.scriptStatus) == 2
+end
 T.LiveState = function() local e = T.live and journal()[T.live] return e and e.state, T.live end
 T.Supported = function() return prof ~= nil end

@@ -509,7 +509,7 @@ var Workshop = (function () {
       files.push({ name: "rom" + String(p + 1).padStart(2, "0") + ".lua", bytes: out.subarray(0, at) });
     }
     var toc = ["## Interface: 16001", "## Title: MekkaBoy Advance Cartridge - " + tocText(name),
-               "## Notes: A game for MekkaBoy Advance (experimental), made from your own copy. Not for sharing.",
+               "## Notes: A game for MekkaBoy Advance, made from your own copy. Not for sharing.",
                "## LoadOnDemand: 1", "## RequiredDeps: MekkaBoy", "## X-MekkaBoy-Cart: " + id, "## X-MekkaBoy-Name: " + tocText(name), "## X-MekkaBoy-System: gba",
                "## X-MekkaBoy-Code: " + l.key];
     for (var i = 0; i <= PARTS; i++) toc.push("rom" + String(i).padStart(2, "0") + ".lua");

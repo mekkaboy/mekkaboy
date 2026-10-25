@@ -74,11 +74,19 @@ local function paintTex(t, c)
     elseif r == "track" then t:SetColorTexture(c.ink[1], c.ink[2], c.ink[3], 0.12)
     elseif r == "fill2" then t:SetColorTexture(c.accent[1], c.accent[2], c.accent[3], 0.6)
     elseif r == "dash" then t:SetColorTexture(c.soft[1], c.soft[2], c.soft[3], 0.6)
-    elseif r == "game" then local g = t.rgb or c.soft t:SetColorTexture(g[1], g[2], g[3], 1) end
+    elseif r == "game" then local g = t.rgb or c.soft t:SetColorTexture(g[1], g[2], g[3], 1)
+    elseif r == "chip" then                                                                          -- (the team preview's type chips:
+        local k = t.rgb                                                                              --  the type's own colour when known)
+        if k then t:SetColorTexture(k[1], k[2], k[3], 0.92) else t:SetColorTexture(c.accent[1], c.accent[2], c.accent[3], 0.18) end
+    elseif r == "chipEdge" then
+        local k = t.rgb
+        if k then t:SetColorTexture(k[1] * 0.55, k[2] * 0.55, k[3] * 0.55, 1) else t:SetColorTexture(c.accent[1], c.accent[2], c.accent[3], 0.5) end
+    end
 end
 local function paintText(fs, c)
-    local k = fs.role == "soft" and c.soft or (fs.role == "accent" and c.accent) or c.ink
+    local k = fs.rgb or (fs.role == "soft" and c.soft) or (fs.role == "accent" and c.accent) or c.ink
     fs:SetTextColor(k[1], k[2], k[3])
+    if MB.GlassShadow then MB.GlassShadow(fs, c) end
 end
 local function tex(p, parent, role, layer)
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
@@ -356,7 +364,7 @@ local function layoutCard()
     local msgA, msgB
     if status == "ok" and c then
         card.title:SetText(c.trainer ~= "" and c.trainer or who)
-        card.sub:SetText(gameName(c) .. MID .. (data.live and "playing now" or ("last played " .. ago(data.played and (wall() - data.played) or nil))))
+        card.sub:SetText(gameName(c) .. MID .. ((c.practice and "practice save" .. MID) or "") .. (data.live and "playing now" or ("last played " .. ago(data.played and (wall() - data.played) or nil))))
         for i, cell in ipairs(card.cells) do
             local m = c.party[i]
             cell:ClearAllPoints()
@@ -777,6 +785,9 @@ function Card.ShowDex(name, from)
     guard(layoutDex)
     return dexPanel
 end
+-- (the building blocks, for the team preview before a trade or battle: UI/Preview.lua wears the same glass)
+Card.Kit = { colors = colors, paintTex = paintTex, paintText = paintText, tex = tex, text = text, edges = edges, tooltip = tooltip,
+             button = button, panel = panel, dashes = dashes, drawIcon = drawIcon, titleCase = titleCase, guard = guard }
 function Card.CardPanel() return card end            -- (for tests)
 function Card.DexPanel() return dexPanel end
 function Card.Textures() return textures.made end

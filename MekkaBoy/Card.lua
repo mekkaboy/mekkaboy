@@ -57,7 +57,7 @@ function Card.Mine()
     local dex = Dex.Pokedex()
     local out = { mine = true, who = (UnitName and UnitName("player")) or "You", playing = playingGame(), share = MB.PlayMode(), at = wall() }
     if card then
-        card.caught = dex.caughtCount
+        if not card.practice then card.caught = dex.caughtCount end      -- (a practice save counts its own, never the player's Pokedex)
         out.card, out.live = card, live(card)
         local row = Dex.Store().saves[card.key]
         out.played = row and row.played or nil

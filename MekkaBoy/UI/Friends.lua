@@ -43,6 +43,7 @@ local function paint(f)
     for _, fs in ipairs(f.texts) do
         local k = fs.role == "soft" and c.soft or c.ink
         fs:SetTextColor(k[1], k[2], k[3])
+        if MB.GlassShadow then MB.GlassShadow(fs, c) end
     end
 end
 local function tex(f, parent, role, layer)

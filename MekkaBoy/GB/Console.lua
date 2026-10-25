@@ -319,6 +319,35 @@ function GBSYS.color(c, RC, GC, BC)
     return r
 end
 
+-- Where the names go, in screen units (x of the name's centre, its bottom measured down from the top of the
+-- picture): over the dot above each trainer's head, 12 dots in from the sides and never above the top. Two trainers
+-- side by side would write their names over each other, so the one nearer the bottom of the screen (in front) keeps
+-- its place and a name that would cross one already placed goes up a line until it is clear.
+-- measure(name) -> width, height (and anything else to hand back, as .fs).
+function MB.LayoutLabels(labels, W, H, cell, measure)
+    local order = {}
+    for i = 1, #labels do order[i] = i end
+    table.sort(order, function(a, b) return labels[a].y > labels[b].y end)
+    local placed = {}
+    for _, i in ipairs(order) do
+        local l = labels[i]
+        local w, h, fs = measure(l.name)
+        local x = math.max(12, math.min(W - 12, floor(l.x + 0.5))) * cell
+        local bottom = math.max(7, math.min(H, floor(l.y + 0.5))) * cell
+        for _ = 1, 4 do
+            local hit
+            for _, p in ipairs(placed) do
+                if math.abs(x - p.x) < (w + p.w) / 2 and bottom > p.bottom - p.h and bottom - h < p.bottom then hit = p break end
+            end
+            if not hit then break end
+            bottom = hit.bottom - hit.h
+        end
+        if bottom < h then bottom = h end
+        placed[#placed + 1] = { x = x, w = w, h = h, bottom = bottom, fs = fs, name = l.name }
+    end
+    return placed
+end
+
 -- Names over friends' ghosts (GBA/Ghosts.lua): small labels anchored to the dot above each ghost's head
 local function placeLabels(g, labels)
     local pool = g.labels
@@ -333,21 +362,24 @@ local function placeLabels(g, labels)
         lf:SetFrameLevel(g.holder:GetFrameLevel() + 2)
         g.labelFrame = lf
     end
-    for i = 1, n do
-        local fs = pool[i]
-        if not fs then
-            fs = g.labelFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    for k = 1, n do
+        if not pool[k] then
+            local fs = g.labelFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             fs:SetTextColor(1, 0.95, 0.8)
             fs:SetShadowColor(0, 0, 0, 1)
-            pool[i] = fs
+            pool[k] = fs
         end
-        local l = labels[i]
-        local x = math.max(12, math.min(sys.W - 12, floor(l.x + 0.5)))
-        local y = math.max(7, math.min(sys.H, floor(l.y + 0.5)))      -- (never above the top edge of the screen)
-        fs:SetText(l.name)
-        fs:ClearAllPoints()
-        fs:SetPoint("BOTTOM", g.holder, "TOPLEFT", x * CELL, -y * CELL)
-        fs:Show()
+    end
+    local k = 0
+    for _, p in ipairs(MB.LayoutLabels(labels or {}, sys.W, sys.H, CELL, function(name)
+        k = k + 1
+        local fs = pool[k]
+        fs:SetText(name)
+        return (fs:GetStringWidth() or 0) + 2, (fs:GetStringHeight() or 10), fs
+    end)) do
+        p.fs:ClearAllPoints()
+        p.fs:SetPoint("BOTTOM", g.holder, "TOPLEFT", p.x, -p.bottom)
+        p.fs:Show()
     end
     for i = n + 1, #pool do pool[i]:Hide() end
 end
@@ -1215,7 +1247,7 @@ function MB.ProfileFinish()
         p.seconds, s.speed.avg + 0.5, s.speed.worst + 0.5, s.pictures.avg, s.wowFps.avg + 0.5, s.wowFps.worst + 0.5))
     Print(("  per frame: emulate %.1f ms, draw %.1f ms; per picture: paint %.1f ms for %d changed dots; garbage %d KB a second; longest turn %d ms.")
         :format(s.emulate.avg, s.draw.avg, s.paint.avg, s.dots.avg + 0.5, s.garbageKB.avg + 0.5, s.turnMax.worst + 0.5))
-    Print("  Kept with your settings: it reaches us when you log out or /reload.")
+    Print("  Saved with your settings when you log out or /reload.")
 end
 MB.AddCommand("profile", "profile [seconds] [label] | profile stop - measure where the game's time goes while you play (for speed work)", function(rest)
     rest = rest or ""
@@ -1506,7 +1538,7 @@ MB.AddCommand("keys", "keys - show the controls", function()
     print("  Load state 1-4         F1, F2, F3, F4")
     print("  Save state 1-4         Shift + F1, F2, F3, F4")
     print("  Pause, then close      ESCAPE")
-    print("  While the console is open it keeps every key (except Print Screen). The ? button on it shows them too.")
+    print("  While the console is open, it keeps every key (except Print Screen). The ? button on the console displays your keybinds.")
     if MB.window:IsShown() and MB.SetKeyDrawer then MB.SetKeyDrawer(true) end
 end)
 

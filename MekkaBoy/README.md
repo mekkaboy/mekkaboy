@@ -188,7 +188,7 @@ FireRed or LeafGreen once you have opened it; otherwise a dashed square.
 Pokémon in Red, Blue, Yellow and the Advance games' saves are counted in full
 once you have opened that game in this version.
 
-## Together Mode (experimental)
+## Together Mode
 
 In the Pokémon games, `/mb together <name>` lets you and a friend see each
 other's trainer walking in your own copies of the game (they add you too).

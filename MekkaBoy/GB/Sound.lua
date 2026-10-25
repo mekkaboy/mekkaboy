@@ -750,7 +750,7 @@ S.fast = false   -- fast-forward: songs carry on, effects are skipped
 function S.Describe()
     if not machine then return "Switch the console on first." end
     if not pack then
-        return "No soundtrack pack for this game. Tools/soundpack.py (or soundpack_gba.py) builds one from your own copy; see the README."
+        return "No soundtrack pack for this game yet. mekkaboy.com/faq explains how to record one from your copy."
     end
     local songs, fx, cries = 0, 0, 0
     for _ in pairs(pack.music) do songs = songs + 1 end

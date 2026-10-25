@@ -353,6 +353,7 @@ function G.Frame(machine, render)
         if s.stepping and not s.stepping.len then s.stepping.len = s.frame - s.stepping.at end    -- (the step before, ended)
         local dx, dy = x - s.x, y - s.y
         if math.abs(dx) + math.abs(dy) == 1 then
+            if kind == "gba" then s.owCB = rd16(prof.main + 4) + rd16(prof.main + 6) * 65536 end   -- (a step: the open map)
             local dir = (dy > 0 and "d") or (dy < 0 and "u") or (dx < 0 and "l") or "r"
             s.stepping = { at = s.frame, dir = dir, fx = s.x, fy = s.y }
             if kind == "gb" then                  -- (the step is already over: it began when the scroll did)
@@ -370,6 +371,7 @@ function G.Frame(machine, render)
             packet(s, true)
         end
     elseif facing ~= s.facing and x == px and y == py then
+        if kind == "gba" then s.owCB = rd16(prof.main + 4) + rd16(prof.main + 6) * 65536 end     -- (turning on the spot: the open map too)
         s.events[#s.events + 1] = { at = s.frame, facing = facing, fx = x, fy = y }
     end
     s.facing = facing
@@ -499,10 +501,10 @@ function G.Heard(text, channel, sender)
         -- (players from the realm come and go without a word)
     elseif not f.told then
         f.told = true
-        Print(("%s is sharing their walk with you. Meet them on the same map; /mb link %s to trade or battle."):format(f.name, f.name))
+        Print(("%s is connected via Together mode. Meet them on the same map; /mb link %s to trade or battle."):format(MB.Link.Short(f.name), MB.Link.Short(f.name)))
     elseif me and me.map and mapKey ~= myKey(me) and g.lastKey ~= mapKey and now - (g.saidAway or 0) > 20 then
         g.saidAway = now
-        Print(("%s is on another map right now."):format(f.name))
+        Print(("%s is on another map right now."):format(MB.Link.Short(f.name)))
     end
     g.lastKey = mapKey
 end
@@ -896,6 +898,52 @@ local function topLayer()
     end
 end
 
+-- Is the game on its open map, or on a screen of its own (the party, the bag, a summary)? Every one of the five games
+-- runs, while I walk about, an input routine (gMain's first callback) that first asks "is the screen routine (the
+-- second) the map's?" -- so the map's screen routine is a word in that input routine's own list of constants, a few
+-- dozen bytes on in the cartridge. The party screen leaves the input routine where it was and puts its own screen
+-- routine in; the test of the pictures alone took it for the map (its Pokemon stand where my trainer does).
+-- The routines found that way, plus the screen routine seen whenever I take a step (sure to be the map's), say yes.
+-- The player I am linked with, when the game draws them itself: in a link room, where the two games keep talking over
+-- the cable the whole time. Linked for a trade or battle where we stand, the games talk only on the trade or battle
+-- screen; back on the map each game has closed its side of the link, and my friend is drawn as ever. (A Game Boy game
+-- links only from its Cable Club rooms.)
+local function partnerTheGameDraws()
+    local ses = MB.Link.Session and MB.Link.Session()
+    if not (ses and ses.state == "linked" and ses.partner) then return nil end
+    if kind ~= "gba" then
+        -- (a Game Boy game draws them in its link rooms only: Gen 1's Trade Center and Colosseum, maps 239 and 240;
+        -- Gen 2's Cable Club rooms, group 20 from map 2 on: Trade Center, Colosseum, Time Capsule; read in the games)
+        local s = me
+        if not (s and s.map) then return nil end
+        if prof.gen == 1 then return (s.map == 239 or s.map == 240) and ses.partner or nil end
+        return (s.group == 20 and s.map >= 2) and ses.partner or nil
+    end
+    local c = ses.ghost
+    if c and (c.phase == "data" or c.localOn == true) then return ses.partner end
+    return nil
+end
+local mapRoutines = { from = nil, set = {} }
+local function rd32bus(a) return rd16(a) + rd16(a + 2) * 65536 end
+local function onOpenMap(s)
+    if kind ~= "gba" then return true end
+    local cb1, cb2 = rd32bus(prof.main), rd32bus(prof.main + 4)
+    if s and s.owCB and cb2 == s.owCB then return true end
+    if cb1 ~= mapRoutines.from and cb1 >= 0x08000000 and cb1 < 0x0A000000 then
+        mapRoutines.from, mapRoutines.set = cb1, {}
+        local a = (cb1 - 1) - (cb1 - 1) % 4
+        local near = false
+        for i = 0, 23 do
+            local w = rd32bus(a + i * 4)
+            if w == prof.main then near = true
+            elseif w % 2 == 1 and w >= 0x08000000 and w < 0x0A000000 and w ~= cb1 then mapRoutines.set[w] = true end
+        end
+        if not near then mapRoutines.set = {} end           -- (not the shape looked for: no answer from it)
+    end
+    if next(mapRoutines.set) then return mapRoutines.set[cb2] == true end
+    return not (s and s.owCB)                                -- (nothing to go by yet: the pictures decide, as before)
+end
+
 local over, lines, oldLines = {}, {}, {}
 local labels = {}         -- the ghosts drawn in the last picture: { x, y (the dot above their head), name }, for GB/Console.lua
 G.labels = labels
@@ -917,14 +965,16 @@ function G.Overlay(machine)
     local plain, pictures, picture
     if kind == "gb" then plain, pictures, picture = gbPlainMap, gbPictures, gbFrame
     else plain, pictures, picture = plainMap, findSheet, framePixels end
-    if s and C and s.map and plain() and pictures() then
+    -- (on the open map only: the game's own screen routine, the one it runs while I walk, is the sure sign; the party
+    -- screen put its Pokemon pictures where my trainer stands, and the picture test alone took it for the map)
+    local onMap = onOpenMap(s)
+    if s and C and s.map and onMap and plain() and pictures() then
         local myx, myy = cam[1] - C[1], cam[2] - C[2]
         local mk = myKey(s)
         local text, top
         local list = {}
         -- (the player I am linked with is drawn by the game itself, in the link rooms: no second picture of them)
-        local ses = MB.Link.Session and MB.Link.Session()
-        local partner = ses and ses.state == "linked" and ses.partner
+        local partner = partnerTheGameDraws()
         for key, g in pairs(ghosts) do
             if now - (g.heard or 0) > FORGET then ghosts[key] = nil
             elseif partner and MB.Link.NameIs(g.name, partner) then
@@ -950,12 +1000,15 @@ function G.Overlay(machine)
         if #list > 0 then
             if kind == "gb" then text = gbText() else text, top = textCells(), topLayer() end
         end
+        local shown, underText = 0, 0                   -- (the ghost being drawn: its dots shown, and those a menu covers)
         local function put(x, y, color)
             if x >= 0 and x < SW and y >= 0 and y < SH then
                 local behindMe = mine and x >= mx0 and x < mx0 + mw and y >= my0 and y < my0 + mh and mine.dots[(y - my0) * mw + (x - mx0)]
-                if not behindMe and not (text and text(x, y)) and not (top and top(x, y)) then
+                if text and text(x, y) then underText = underText + 1
+                elseif not behindMe and not (top and top(x, y)) then
                     over[y * SW + x + 1] = color
                     lines[y + 1] = true
+                    shown = shown + 1
                 end
             end
         end
@@ -972,10 +1025,18 @@ function G.Overlay(machine)
                 local lut = pic.indexed and gbColors(mySlot or pic.slot)
                 if surf then sy = sy + bob end
                 if sx > -w and sx < SW and sy > -pic.h - 8 and sy < SH then
+                    shown, underText = 0, 0
+                    local label
                     if MB.Opt("ghostNames", true) or g.state == 1 or g.state == 2 then
                         local name = MB.Link.Short(g.name)
                         if g.state == 1 then name = name .. " (in a battle)" elseif g.state == 2 then name = name .. " (paused)" end
-                        labels[#labels + 1] = { x = sx + w / 2, y = sy - (pic.h - BASEH) - 2, name = name }
+                        -- (just above the head: the picture's top row with anything in it, not the top of its box)
+                        if not pic.top then
+                            local t = pic.h
+                            for k in pairs(pic.dots) do local r = floor(k / w) if r < t then t = r end end
+                            pic.top = t
+                        end
+                        label = { x = sx + w / 2, y = sy + pic.top - 1, name = name }
                     end
                     -- the Pokemon under a surfing friend first (the game puts it 8 dots below the trainer's picture)
                     local blob = surf and blobPixels(pic.pal, g.facing or 1)
@@ -999,6 +1060,11 @@ function G.Overlay(machine)
                         end
                         put(x, y, color)
                     end
+                    -- the name goes with the trainer: not over a menu or a message that covers them, and not over a roof
+                    -- or a tree top that hides them altogether (nothing of them shown)
+                    if label and not (shown == 0 or underText > shown or (text and text(floor(label.x), math.max(0, floor(label.y) - 4)))) then
+                        labels[#labels + 1] = label
+                    end
                 end
             end
         end
@@ -1015,8 +1081,7 @@ end
 local drawnPartner = false        -- (whom the last picture left out for being my link partner)
 function G.Moving()
     if dirty then return true end
-    local ses = MB.Link.Session and MB.Link.Session()
-    local partner = ses and ses.state == "linked" and ses.partner or false
+    local partner = partnerTheGameDraws() or false
     if partner ~= drawnPartner then drawnPartner = partner return true end     -- (a link began or ended: paint again)
     if not on or not me or not me.map then return false end
     local now, mk, busy = GetTime(), myKey(me), false
@@ -1038,6 +1103,15 @@ end
 local DIR_OF = { [1] = { 0, 1 }, [2] = { 0, -1 }, [3] = { -1, 0 }, [4] = { 1, 0 } }
 function G.Pressed(button)
     if not on or not prof or not me or not me.map then return end
+    -- (only on the open map, out of every menu: A in the trade screen, the START menu or a message is the game's own)
+    if kind == "gb" then
+        if not gbPlainMap() then return end
+    else
+        if not onOpenMap(me) or not plainMap() then return end
+        local free = MB.Trade3 and MB.Trade3.FreeOnMap and MB.Trade3.FreeOnMap()
+        if free == false then return end
+        if free == nil then local t = textCells() if t and (t(200, 40) or t(120, 140)) then return end end
+    end
     local d = DIR_OF[me.facing or 0]
     if not d then return end
     local mk, tx, ty = myKey(me), me.x + d[1], me.y + d[2]
@@ -1050,11 +1124,22 @@ function G.Pressed(button)
                     local name = g.name
                     local s = MB.Link.Session and MB.Link.Session()
                     local linked = s and s.state == "linked" and MB.Link.NameIs(s.partner, name)
-                    MB.Friends.Ask("together", ("|cffffd100%s|r is here.\nTrade Pokemon or battle right where you stand?%s"):format(name,
+                    MB.Friends.Ask("together", ("|cffffd100%s|r is here.\nTrade Pokemon or battle right where you stand?%s"):format(MB.Link.Short(name),
                         linked and "" or " (MekkaBoy links you first: they get a pop-up.)"), "Trade", "Not now", function() T3.Request(name) end, nil, 30,
                         "Battle", function() T3.Request(name, nil, "battle") end)
                 else
-                    Print(("This is %s. To trade or battle: /mb link %s (they answer with /mb link), then both of you go to the link desk."):format(g.name, g.name))
+                    -- (a Game Boy game trades and battles only at the Cable Club: link up here, then meet there)
+                    local name = g.name
+                    local s = MB.Link.Session and MB.Link.Session()
+                    local linked = s and s.state == "linked" and MB.Link.NameIs(s.partner, name)
+                    if linked then
+                        Print(("You and %s are linked: meet at the Cable Club in a Pokemon Center to trade or battle."):format(MB.Link.Short(name)))
+                    elseif MB.Friends and MB.Friends.Ask then
+                        MB.Friends.Ask("together", ("|cffffd100%s|r is here.\nLink up, then meet at the Cable Club in a Pokemon Center?"):format(MB.Link.Short(name)),
+                            "Link", "Not now", function() MB.Link.Open(name) end, nil, 30)
+                    else
+                        Print(("%s is here. /mb link %s, then meet at the Cable Club in a Pokemon Center."):format(MB.Link.Short(name), MB.Link.Short(name)))
+                    end
                 end
             end
             return
@@ -1130,7 +1215,6 @@ local function saved() local db = MB.DB() db.ghostFriends = db.ghostFriends or {
 -- Who answered: the friends kept from earlier sessions are told about in one line, once all of them have answered or
 -- been asked four times (about a minute); a friend just added, or one who comes online later, gets a line of their own.
 local roll = { yes = {}, no = {} }
-local NOT_REACHED = "offline, the other faction, or a MekkaBoy older than 0.16.1"
 local function names(list)
     if #list <= 4 then
         if #list == 1 then return list[1] end
@@ -1142,27 +1226,24 @@ local function flushRoll()
     if roll.done then return end
     roll.done = true
     local yes, no = roll.yes, roll.no
-    table.sort(yes) table.sort(no)
+    local function shown(t) local o = {} for i, n in ipairs(t) do o[i] = MB.Link.Short(n) end table.sort(o) return o end
+    yes, no = shown(yes), shown(no)
     if #yes == 0 and #no == 0 then return end
-    local line = "Together: "
-    if #yes > 0 then line = line .. "your walk reaches " .. names(yes) .. "." end
-    if #no > 0 then
-        line = line .. (#yes > 0 and " Not answering yet (" or "no friends answering yet (") .. NOT_REACHED .. "): "
-            .. names(no) .. ". /mb together why shows each one."
-    end
-    Print(line)
+    -- (only who is connected: anyone not answering yet is left to /mb together why)
+    if #yes > 0 then Print("Together mode: you're connected to " .. names(yes) .. ".")
+    else Print("Together mode: your connection hasn't reached any friends. /mb together why to see why.") end
 end
 local function heard(f, yes)
     if f.fresh or roll.done then
-        if yes then Print(("%s's MekkaBoy answered: your walk reaches them."):format(f.name))
-        else Print(("%s has not answered yet: %s. Your walk is not reaching them."):format(f.name, NOT_REACHED)) end
+        if yes then Print(("Together mode: you're connected to %s."):format(MB.Link.Short(f.name)))
+        else Print(("Together mode: %s isn't connected yet. /mb together why to see why."):format(MB.Link.Short(f.name))) end
         return
     end
     if yes then        -- (answered after all, before the line went out)
         for i = #roll.no, 1, -1 do if roll.no[i] == f.name then table.remove(roll.no, i) end end
     end
     local list = yes and roll.yes or roll.no
-    list[#list + 1] = f.name
+    list[#list + 1] = f.name           -- (kept as stored, to be found again above; shown as WoW writes names in flushRoll)
     if not roll.started then
         roll.started = true
         if C_Timer and C_Timer.After then C_Timer.After(75, flushRoll) end     -- (in case someone is never settled)
@@ -1184,6 +1265,15 @@ function G.Ask(f)
         f.spelling, f.asks = spelling, 0
         local k = MB.Link.Plain(theirs)
         if not friends[k] then alias[k] = MB.Link.Plain(f.name) end    -- (their messages carry this spelling)
+        -- the same name as typed, only written differently (small letters, no realm): keep it the way WoW writes it
+        local mine = MB.Link.Plain(f.name)
+        if type(theirs) == "string" and k == mine and theirs ~= f.name then
+            local was = f.name
+            f.name = theirs
+            if saved()[mine] then saved()[mine] = theirs end
+            for _, g in pairs(ghosts) do if g.name == was then g.name = theirs end end
+            for _, t in ipairs({ roll.yes, roll.no }) do for i, n in ipairs(t) do if n == was then t[i] = theirs end end end
+        end
         if first and not f.saidYes then
             f.saidYes = true
             heard(f, true)
@@ -1470,7 +1560,7 @@ local function together(rest)
         pcall(G.SayBye)
         on, dirty = false, true
         MB.DB().opt.ghosts = false
-        Print("Together off: you no longer share your walk, and nobody is drawn.")
+        Print("Together mode off: you won't see friends' trainers, and they won't see yours.")
         return
     elseif word == "why" then
         Print("Together: " .. G.Why())
@@ -1492,7 +1582,7 @@ local function together(rest)
         return
     elseif word == "on" or word == "" or word == "list" or word == "help" then
         local list = {}
-        for _, f in pairs(friends) do list[#list + 1] = f.name end
+        for _, f in pairs(friends) do list[#list + 1] = MB.Link.Short(f.name) end
         if #list == 0 then Print("/mb together <name> adds a friend (they add you too). Then you see each other walking in the same Pokemon game.") return end
         if word == "help" then Print("/mb together <name> adds a friend; on, off, why; names on|off; forget <name>; realm on|watch|off|who; block|unblock <name>.") return end
         if word ~= "list" then
@@ -1500,7 +1590,7 @@ local function together(rest)
             MB.DB().opt.ghosts = true
             for _, f in pairs(friends) do if not f.spelling then G.Ask(f) end end
         end
-        Print(("Together %s, with: %s. Experimental. You meet friends playing a game of the same group: Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald."):format(on and "on" or "off", table.concat(list, ", ")))
+        Print(("Together mode %s, with: %s. You see friends playing a game from the same group: Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald."):format(on and "on" or "off", table.concat(list, ", ")))
         if on and m and not prof then Print("Together does not know this game yet.") end
         return
     end
@@ -1518,11 +1608,11 @@ local function together(rest)
     local mine = UnitName and UnitName("player") or "you"
     local a, b = UnitName and UnitName("player")
     if type(b) == "string" and b ~= "" then mine = a .. " " .. b end
-    Print(("Sharing your walk with %s, and drawing theirs once they add you (they type: /mb together %s). /mb together off stops."):format(rest, mine))
+    Print(("Together mode: added %s. You'll see each other once they add you too (/mb together %s). /mb together off stops it."):format(rest, mine))
     if m and not prof then Print("Together does not know this game. It knows the Pokemon games Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald.")
-    elseif not m then Print("Start a Pokemon game (Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald) to share your walk.") end
+    elseif not m then Print("Start a Pokemon game (Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald) to use Together mode.") end
 end
-MB.AddCommand("together", "together <name>|target - walk together: see a friend's trainer in your Pokemon game (they see you once they add you too); together on|off|why; together names on|off; together forget <name>", together)
+MB.AddCommand("together", "together <name>|target - Together mode: see a friend's trainer in your Pokemon game (they see you once they add you too); together on|off|why; together names on|off; together forget <name>", together)
 MB.AddCommand("ghosts", "", together)      -- (the old name, kept quietly so earlier notes still work)
 
 G.PROFILES = PROFILES
@@ -1556,7 +1646,7 @@ function G.FriendLines()
         if not f.spelling then reach = "not found yet"
         elseif MB.Link.Unreachable(f.spelling) then reach = ("found as \"%s\", but the server just said nobody is online by that name"):format(f.spelling)
         else reach = ("found as \"%s\""):format(f.spelling) end
-        out[#out + 1] = ("%s: %s; sent %d, heard %d%s%s"):format(f.name, reach, f.sent or 0, f.got or 0,
+        out[#out + 1] = ("%s: %s; sent %d, heard %d%s%s"):format(MB.Link.Short(f.name), reach, f.sent or 0, f.got or 0,
             f.heard and (" (last %d s ago)"):format(now - f.heard) or "",
             f.refused and (" (the server refused one: " .. tostring(f.refused) .. ")") or "")
     end

@@ -97,6 +97,19 @@ function Sys.new(rom, key)
         -- practice saves are on and this game has not been played with them yet: put the ready-made one in
         saves.gba[key] = MB.TestSaves.For("gba", rom.banks[1]:sub(0xAD, 0xB0)) or false
     end
+    if MB.DB().testSaves and MB.TestSaves and MB.TestSaves.ValvesFor then
+        -- practice saves with ready-made valves (the filming scenes): put them in, once per set
+        local vs, tag = MB.TestSaves.ValvesFor("gba", rom.banks[1]:sub(0xAD, 0xB0))
+        if vs then
+            local st = Sys.statesFor(key)
+            if st.scenes ~= tag then
+                for slot, v in pairs(vs) do st[slot] = v end
+                st.scenes = tag
+                st.resume, st.resumeRev = nil, nil          -- (start from the practice save, then F1-F4 for the scenes)
+                Print("Practice valves are in: F1 to F4 load the four scenes.")
+            end
+        end
+    end
     local kept = saves.gba[key] or nil
     -- our own games tell the time by the realm's clock, from the server; a game of yours by the computer's
     local ours = MB.IsOurs and MB.IsOurs(rom)
@@ -121,7 +134,7 @@ function Sys.keep(m, id, quiet, say)
     if say then say("Save kept") end
     if not savedOnce then
         savedOnce = true
-        Print("Save kept. WoW writes it to disk when you log out or /reload, so do one of those before closing the game client.")
+        Print("Save kept. WoW writes it to disk when you log out or /reload.")
     end
 end
 -- (the console is put away: whatever the game has written so far is kept)
@@ -192,7 +205,7 @@ function Adv.Open(id)
     MB.PlayCart(pick.id)
 end
 
-MB.AddCommand("gba", "gba <name> - put a Game Boy Advance cartridge in (EXPERIMENTAL; or choose it on the console like any other)", function(rest)
+MB.AddCommand("gba", "gba <name> - put a Game Boy Advance cartridge in (or choose it on the console like any other)", function(rest)
     rest = (rest or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
     if rest == "off" then Adv.Close() return end
     local every = rest:match("^picture%s+(%d)$")

@@ -78,7 +78,7 @@ function T.Notice(rom)
     db.told[key] = state
     if e and e.status == "played" and exact and not T.Slow(e) then return end
     if not e then
-        Print("This is not a game we have tried: it may play, play with faults, or stop. /mb tested lists the ones we have.")
+        Print("We haven't tested this game yet. /mb tested lists the ones we have.")
         return
     end
     Print(("%s: %s%s."):format(e.name, STATUS[e.status], exact and "" or " (we tried another version of it)"))
@@ -89,7 +89,7 @@ function T.Notice(rom)
     if T.Slow(e) then Print(("A heavy game (%d of 10): expect it to run slow."):format(T.Weight(e))) end
     if e.sound == "native" then return end
     if e.sound == "own" then Print("No sound: it has a music program of its own.")
-    elseif not (MB.SoundPacks and MB.SoundPacks[rom.id]) then Print("Silent until a soundtrack pack is made for it (see the README).") end
+    elseif not (MB.SoundPacks and MB.SoundPacks[rom.id]) then Print("Silent until you record a soundtrack pack from your copy (mekkaboy.com/faq explains how).") end
 end
 
 MB.AddCommand("tested", "tested - the Game Boy Advance games tried so far, and what to expect of them", function()

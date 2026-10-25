@@ -347,9 +347,45 @@ local function cardOf(row)
              badgeMask = row.badgeMask, badgeTotal = BADGE_TOTAL[row.gen] or 8, caught = count(unpackSet(row.caught)),
              party = party, record = rec and { wins = rec[1], losses = rec[2], draws = rec[3] } or nil, pending = row.pending }
 end
+-- On a practice save (QA builds only), the card shows the practice trainer while that game runs: what is on screen,
+-- never the player's own save behind it. It is read on the spot and kept nowhere (not in the Pokedex, not in
+-- MekkaBoyDB.dex), and read again only when the practice save is kept again.
+local practice = { key = nil, rev = nil, card = nil }
+local function practiceSave(key)
+    local t = MB.DB().test
+    local s = t and t.gba and t.gba[key]
+    if type(s) == "table" and s.sectors then return s, "gba", t.rev and t.rev[key] or 0 end
+    s = t and t.gb and t.gb[key]
+    if type(s) == "table" and s.ram then return s, "gb", t.rev and t.rev[key] or 0 end
+    return nil
+end
+local function practiceCard(key)
+    local save, system, rev = practiceSave(key)
+    if not save then return nil end
+    if practice.key == key and practice.rev == rev and practice.card then return practice.card end
+    local d = store()
+    local rom = romFor(key)
+    local t = rom and learn(key, rom) or nil
+    local known = d.carts[key] or {}
+    local c = MB.Carts and MB.Carts.Find and MB.Carts.Find(key)
+    local how = { system = system, rom = rom, code = known.code or (c and c.code), title = known.title, nat = t and t.nat or false }
+    local ok, rec = pcall(R.Read, save, how)
+    if not (ok and rec) then return nil end
+    local row = makeRow(key, system, rec, rev)
+    settle(row)
+    local card = cardOf(row)
+    card.practice = true
+    practice.key, practice.rev, practice.card = key, rev, card
+    return card
+end
+Dex.PracticeCard = practiceCard
 function Dex.Card()
     local d = store()
     local db = MB.DB()
+    if db.testSaves and MB.CurrentStore and MB.IsRunning and MB.IsRunning() then
+        local card = practiceCard(MB.CurrentStore())
+        if card then return card end
+    end
     if not db.testSaves and MB.CurrentStore then
         local cur = MB.CurrentStore()
         local row = cur and d.saves[cur]

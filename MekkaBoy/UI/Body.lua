@@ -60,11 +60,15 @@ function MB.SetColorway(name)
     if not (name and MB.ColorwayNames[name]) then return false end
     MB.DB().opt.colorway = name
     body:SetTexture(ART .. "body_" .. name .. ".tga")
+    if MB.SetGaugeColorway then MB.SetGaugeColorway(name) end
     if MB.PaintGlass then MB.PaintGlass() end
     return true
 end
 function MB.Colorway() return colorway() end
-MB.onLogin[#MB.onLogin + 1] = function() body:SetTexture(ART .. "body_" .. colorway() .. ".tga") end
+MB.onLogin[#MB.onLogin + 1] = function()
+    body:SetTexture(ART .. "body_" .. colorway() .. ".tga")
+    if MB.SetGaugeColorway then MB.SetGaugeColorway(colorway()) end
+end
 -- /mb color <name>: the console's colorway. GB/Console.lua owns the /mb color command, which also takes lcd|raw for
 -- the Game Boy Color screen, and hands every other word here.
 function MB.ColorwayCommand(rest)
@@ -142,6 +146,14 @@ end
 
 -- ------------------------------------------------------------- gauge ---
 local ga = Lay.gauge
+-- The gauge is its own picture laid over the body (which has bare metal there), and it is only shown while a flight
+-- with a known time counts down: no dial on the ground, and none on a first flight while that route is being timed.
+local plate = win:CreateTexture(nil, "ARTWORK", nil, 1)
+plate:SetTexture(ART .. "gauge_gunmetal.tga")
+at(plate, ga[1] - 64, ga[2] - 64, 128)
+plate:Hide()
+function MB.SetGaugeColorway(name) plate:SetTexture(ART .. "gauge_" .. name .. ".tga") end
+local counting = false                   -- (a countdown is on: the gauge, needle and time show)
 local needle = win:CreateTexture(nil, "OVERLAY")
 needle:SetTexture(ART .. "needle.tga")
 at(needle, ga[1] - ga[3], ga[2] - ga[3], ga[3] * 2)
@@ -162,8 +174,14 @@ local function needleDegrees(fraction)
 end
 needle:SetRotation(-rad(needleAt))
 
+local function showGauge()
+    local on = counting and MB.Look and MB.Look() == "console"
+    plate:SetShown(on and true or false)
+    needle:SetShown(on and true or false)
+end
 function MB.SetFlight(text, fraction)
     flightText:SetText(text or "")
+    if counting ~= (fraction ~= nil) then counting = fraction ~= nil showGauge() end
     needleWant = needleDegrees(fraction)
     if not win:IsVisible() then -- nobody is watching: no need to swing
         needleAt = needleWant
@@ -171,6 +189,7 @@ function MB.SetFlight(text, fraction)
     end
 end
 function MB.NeedleDegrees() return needleAt, needleWant end
+function MB.GaugeShown() return plate:IsShown(), needle:IsShown() end
 win:SetScript("OnHide", function()
     needleAt = needleWant
     needle:SetRotation(-rad(needleAt))
@@ -356,7 +375,7 @@ local GLASS = {
     midnight = { bg = { 0.07, 0.09, 0.19 }, ink = { 0.90, 0.92, 1.00 }, soft = { 0.65, 0.69, 0.88 }, accent = { 0.56, 0.64, 1.00 }, edge = { 0.67, 0.73, 1, 0.22 } },
     arcane   = { bg = { 0.14, 0.09, 0.23 }, ink = { 0.94, 0.91, 1.00 }, soft = { 0.75, 0.68, 0.90 }, accent = { 0.76, 0.61, 0.96 }, edge = { 0.78, 0.67, 1, 0.22 } },
     verdant  = { bg = { 0.07, 0.16, 0.10 }, ink = { 0.90, 0.96, 0.91 }, soft = { 0.65, 0.79, 0.69 }, accent = { 0.50, 0.82, 0.60 }, edge = { 0.59, 0.90, 0.67, 0.20 } },
-    ivory    = { bg = { 0.94, 0.92, 0.88 }, ink = { 0.16, 0.15, 0.13 }, soft = { 0.37, 0.34, 0.29 }, accent = { 0.54, 0.42, 0.20 }, edge = { 0.24, 0.20, 0.12, 0.22 } },
+    ivory    = { bg = { 0.94, 0.92, 0.88 }, ink = { 0.09, 0.08, 0.07 }, soft = { 0.27, 0.24, 0.20 }, accent = { 0.45, 0.34, 0.14 }, edge = { 0.24, 0.20, 0.12, 0.30 } },
     rosegold = { bg = { 0.23, 0.13, 0.13 }, ink = { 0.98, 0.91, 0.89 }, soft = { 0.88, 0.73, 0.69 }, accent = { 0.92, 0.66, 0.58 }, edge = { 0.94, 0.71, 0.65, 0.24 } },
 }
 local pane = CreateFrame("Frame", nil, win)
@@ -447,17 +466,32 @@ function MB.WindowSize() return sizeW, sizeH end
 local function glassColors()
     return GLASS[colorway()] or GLASS.gunmetal
 end
+-- A pale colorway (Ivory) has dark text on a light panel: WoW's fonts carry a black drop shadow that smudges dark
+-- text there, and a see-through pale panel over a dark world leaves the text on a muddy grey. So on a pale panel the
+-- shadow goes and the panel is nearly solid.
+local function pale(c) return (c.bg[1] + c.bg[2] + c.bg[3]) > 1.5 end
+local function glassAlpha(c)
+    local a = MB.Opt("glassAlpha", 0.66)
+    if pale(c or glassColors()) then return math.max(a, 0.9) end
+    return a
+end
+function MB.GlassShadow(fs, c)
+    if not (fs and fs.SetShadowColor) then return end
+    if pale(c or glassColors()) then fs:SetShadowColor(0, 0, 0, 0) else fs:SetShadowColor(0, 0, 0, 1) end
+end
 local function paintGlass()
     local c = glassColors()
-    local a = MB.Opt("glassAlpha", 0.66)
+    local a = glassAlpha(c)
     paneBg:SetColorTexture(c.bg[1], c.bg[2], c.bg[3], a)
     for _, t in ipairs(edges) do t:SetColorTexture(c.edge[1], c.edge[2], c.edge[3], c.edge[4]) end
     for _, b in ipairs(glassButtons) do
         b.face:SetColorTexture(c.ink[1], c.ink[2], c.ink[3], 0.08)
         b.label:SetTextColor(c.ink[1], c.ink[2], c.ink[3])
+        MB.GlassShadow(b.label, c)
     end
     if look == "glass" then
         status:SetTextColor(c.ink[1], c.ink[2], c.ink[3])
+        MB.GlassShadow(status, c)
         flightText:SetTextColor(c.soft[1], c.soft[2], c.soft[3])
         flightText:SetShadowColor(0, 0, 0, 0)
     end
@@ -466,10 +500,10 @@ local function paintGlass()
     if MB.PaintFriends then pcall(MB.PaintFriends) end
 end
 MB.PaintGlass = paintGlass
-function MB.GlassColors() return glassColors(), MB.Opt("glassAlpha", 0.66) end    -- (the key drawer wears them too: UI/KeyDrawer.lua)
+function MB.GlassColors() return glassColors(), glassAlpha() end    -- (the key drawer wears them too: UI/KeyDrawer.lua)
 
 -- the parts only the console has
-local consoleParts = { body, needle, knob }
+local consoleParts = { body, knob }             -- (the gauge and its needle come and go with a countdown: showGauge)
 for _, b in pairs(MB.buttons) do consoleParts[#consoleParts + 1] = b end
 
 function MB.Look() return look end
@@ -477,6 +511,7 @@ local function applyLook()
     look = (MB.Opt("look", "glass") == "console") and "console" or "glass"
     local glassy = look == "glass"
     for _, part in ipairs(consoleParts) do part:SetShown(not glassy) end
+    showGauge()
     for _, t in pairs(pressGlow) do t:Hide() end
     pane:SetShown(glassy)
     if glassy then
@@ -498,6 +533,7 @@ local function applyLook()
         at(status, sp[1] + 6, sp[2] + 1, sp[3] - 12, sp[4] - 2)
         status:SetJustifyH("CENTER")
         status:SetTextColor(1, 0.86, 0.55)
+        status:SetShadowColor(0, 0, 0, 1)
         flightText:ClearAllPoints()
         flightText:SetPoint("CENTER", win, "TOPLEFT", ga[1], -(ga[2] + ga[3] + 12))
         flightText:SetTextColor(0.25, 0.16, 0.05)
