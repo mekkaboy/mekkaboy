@@ -16,15 +16,17 @@ local function privateCopy()
     local db = MB.DB()
     local id = db.lastCart
     local last = id and MB.Carts.Find and MB.Carts.Find(id)
-    if not id or (last and last.system == "gba") then        -- (this test is for the Game Boy machine)
+    if not id or (last and last.system) then                 -- (this test is for the Game Boy machine: not an Advance
+        -- game, and not one of the games written for MekkaBoy itself, which have no cartridge to time)
         id = nil
         for _, c in ipairs(MB.Carts.List and MB.Carts.List() or {}) do
-            if c.system ~= "gba" then id = c.id break end
+            if not c.system then id = c.id break end
         end
     end
     if not id then return nil, "there is no game to try" end
     local rom = MB.Carts.Load(id)
     if not rom then return nil, "could not load " .. tostring(id) end
+    if rom.system or (rom.numBanks or 0) < 1 then return nil, "it only times Game Boy and Game Boy Color games, and none is on the shelf" end
     local ok, m = pcall(MB.GB.new, { bank = function(n) return rom.banks[n + 1] end, numBanks = rom.numBanks,
                                      save = db.gb and db.gb[id], now = time })
     if not ok then return nil, tostring(m) end

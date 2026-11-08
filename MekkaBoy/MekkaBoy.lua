@@ -7,7 +7,7 @@ local addonName, MB = ...
 -- two MekkaBoys tell each other both when they share a group (Hello.lua).
 -- PROTOCOL only changes when the link's messages change in a way an older
 -- copy could not follow; that, not the version, is what stops two from linking.
-MB.VERSION = "0.22.1-beta"
+MB.VERSION = "0.22.2-beta"
 MB.PROTOCOL = 1
 -- "stable" (the Release on CurseForge) or "alpha" (the testers' build, and this source tree): a stable build leaves out
 -- what has not been proven with real players yet (dev/make_release.py --channel sets it; see MB.Alpha's callers)

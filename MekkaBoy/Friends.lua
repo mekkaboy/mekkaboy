@@ -166,6 +166,7 @@ function Friends.Heard(text, channel, sender)
         local inv = Friends.invite
         if inv and MB.Link.NameIs(inv.sender, sender) and Friends.ShowInvite then Friends.ShowInvite(inv) end
         if MB.Trade3 and MB.Trade3.Seen then pcall(MB.Trade3.Seen, sender) end
+        if MB.Hello and MB.Hello.Seen then pcall(MB.Hello.Seen, version, sender) end    -- (a newer copy: say so, Hello.lua)
         if Friends.Changed then Friends.Changed() end
     end
 end
