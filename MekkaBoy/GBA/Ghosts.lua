@@ -34,12 +34,15 @@ local floor = math.floor
 --        header: the map's header, whose first word points at its layout (+0x10, +0x14: the two tile sets; a tile
 --        set's behavior list at +attrOff, attrSize bytes a tile, behavior = value % behavior); tile numbers below
 --        primary are in the first set. tallGrass: the behaviors the game draws grass over a trainer on.
+--   sbPtr / sb (0.23): where the game keeps its own record of where you are (the first save block: +4 map group,
+--        +5 map), found through a pointer (Emerald, FireRed, LeafGreen) or at a fixed place (Ruby, Sapphire). The
+--        moving-object entry keeps the map the trainer last appeared on: walking over a map's edge does not change it.
 local PROFILES = {
-    BPEE = { obj = 0x02037350, family = "E", main = 0x030022C0, inBattle = 0x439, grid = 0x03005DC0, header = 0x02037318, attrOff = 0x10, attrSize = 2, behavior = 256, primary = 512, tallGrass = { [2] = true } },
-    BPRE = { obj = 0x02036E38, family = "K", main = 0x030030F0, inBattle = 0x439, grid = 0x03005040, header = 0x02036DFC, attrOff = 0x14, attrSize = 4, behavior = 512, primary = 640, tallGrass = { [2] = true, [209] = true } },
-    BPGE = { obj = 0x02036E38, family = "K", main = 0x030030F0, inBattle = 0x439, grid = 0x03005040, header = 0x02036DFC, attrOff = 0x14, attrSize = 4, behavior = 512, primary = 640, tallGrass = { [2] = true, [209] = true } },
-    AXVE = { obj = 0x030048A0, family = "R", main = 0x03001770, inBattle = 0x43D, grid = 0x03004870, header = 0x0202E828, attrOff = 0x10, attrSize = 2, behavior = 256, primary = 512, tallGrass = { [2] = true } },
-    AXPE = { obj = 0x030048A0, family = "R", main = 0x03001770, inBattle = 0x43D, grid = 0x03004870, header = 0x0202E828, attrOff = 0x10, attrSize = 2, behavior = 256, primary = 512, tallGrass = { [2] = true } },
+    BPEE = { sbPtr = 0x03005D8C, obj = 0x02037350, family = "E", main = 0x030022C0, inBattle = 0x439, grid = 0x03005DC0, header = 0x02037318, attrOff = 0x10, attrSize = 2, behavior = 256, primary = 512, tallGrass = { [2] = true } },
+    BPRE = { sbPtr = 0x03005008, obj = 0x02036E38, family = "K", main = 0x030030F0, inBattle = 0x439, grid = 0x03005040, header = 0x02036DFC, attrOff = 0x14, attrSize = 4, behavior = 512, primary = 640, tallGrass = { [2] = true, [209] = true } },
+    BPGE = { sbPtr = 0x03005008, obj = 0x02036E38, family = "K", main = 0x030030F0, inBattle = 0x439, grid = 0x03005040, header = 0x02036DFC, attrOff = 0x14, attrSize = 4, behavior = 512, primary = 640, tallGrass = { [2] = true, [209] = true } },
+    AXVE = { sb = 0x02025734, obj = 0x030048A0, family = "R", main = 0x03001770, inBattle = 0x43D, grid = 0x03004870, header = 0x0202E828, attrOff = 0x10, attrSize = 2, behavior = 256, primary = 512, tallGrass = { [2] = true } },
+    AXPE = { sb = 0x02025734, obj = 0x030048A0, family = "R", main = 0x03001770, inBattle = 0x43D, grid = 0x03004870, header = 0x0202E828, attrOff = 0x10, attrSize = 2, behavior = 256, primary = 512, tallGrass = { [2] = true } },
 }
 -- Pictures in the game, by code and revision (the byte at 0xBC): the tall-grass blades the game draws over a trainer
 -- (16x16, 4 bits a dot, its resting frame first), the Pokemon a trainer surfs on (three 32x32 frames: down, up,
@@ -155,12 +158,28 @@ local KEEP_ALIVE = 8      -- seconds between packets while standing still
 local FORGET = 30         -- seconds without a word before a ghost goes
 local LANE = 5            -- the addon name ghost packets go out on (GB/Link.lua: lanes 1-4 are the link's)
 local COMMAND_WORDS = { on = true, off = true, why = true, forget = true, list = true, help = true, names = true,
-                        realm = true, block = true, unblock = true }
--- Together with the whole realm: everyone who chose it shares one hidden chat channel (one message a second reaches
--- them all; whispering each player would not), and each MekkaBoy draws the players on its own map
-local REALM_CHANNEL = "MekkaBoyTogether"
+                        realm = true, block = true, unblock = true, join = true, community = true }
+-- Together with players you have not added (0.23): Classic does not let addons talk over chat channels (patch 1.13.3),
+-- so the hidden "MekkaBoyTogether" channel of 0.20 to 0.22 never carried anything between players. Players are met
+-- instead through the MekkaBoyTogether community (one per faction and ruleset; Blizzard's Communities), your guild and
+-- your group: a short "here I am" (GH) goes to them now and then and whenever your map changes, MekkaBoys that hear it
+-- answer, and from then on the players on the same map whisper each other their steps, as friends do.
+local REALM_CHANNEL = "MekkaBoyTogether"      -- (0.22's channel: left if we are still in it)
 local REALM_DRAW = 8      -- at most this many drawn at once (friends first, then the nearest)
-local REALM_KEEP = 40     -- players from the realm kept in mind at once
+local REALM_KEEP = 40     -- players met (not added) kept in mind at once
+local PEER_SEND = 6       -- at most this many met players sent my steps (those on my map, the latest heard first)
+local PEER_KEEP = 600     -- seconds a met player is kept in mind without a word
+local HELLO_EVERY = 60    -- seconds between "here I am"s to the guild, the group and a few community members
+local HELLO_SOON = 5      -- the least time between two, when the map changes often
+local COMMUNITY_EACH = 6  -- community members told each minute, in turn (those met already hear at every map change)
+-- the MekkaBoyTogether communities: faction -> ruleset -> invite code. A ruleset is guessed from the realm's name.
+-- (owners: Luke Redbird for Alliance PvP; Mekkaboy Alliance and Mekkaboy Horde for PvE; Mekkaboy Alliancerp and
+-- Mekkaboy Horderp for RP; Mekkaboy Alliancerpvp and Mekkaboy Horderpvp for RP-PvP)
+local COMMUNITIES = {
+    Alliance = { PvP = "K09ZNqqFkA9", PvE = "eyXGPqgIb0b", RP = "yzZyVRLumLb", RPPvP = "lKAGzqbswGv" },
+    Horde = { PvE = "N9K2zMACWYj", RP = "zejyXnrUkM3", RPPvP = "GKMVZArh7qx" },
+}
+local COMMUNITY_NAME = "MekkaBoyTogether"
 
 local on = false
 local myKey, stepSheetJob, decode4 -- (below)
@@ -173,13 +192,17 @@ local me                  -- my trainer as last read
 local ghosts = {}         -- friend key -> ghost
 local friends = {}        -- friend key (plain name) -> { name, spelling (the one that reaches them), heard }
 local alias = {}          -- another plain spelling a friend's messages carry -> friend key
-local strangers = {}      -- players met through the realm channel, not added as friends: key -> { name, heard }
-local realm = { num = 0, sent = 0, heard = {}, joins = 0 }   -- the realm channel: its number here, and what went on there
+-- players met through the community, the guild or the group, not added as friends: key -> { name, spelling (whispered
+-- back to), place (their map, as placeKey writes it), heard, via ("community", "guild", "group"), lane }
+local strangers = {}
+local realm = { sent = 0, heard = {}, hellos = 0, answers = 0, helloAt = -100, roundAt = -100, turn = 0 }   -- what went on
 -- "on" (share and see), "watch" (see, unseen), "off", or nil (not asked yet)
 -- (a stable build: the realm is not offered yet, and nobody is asked)
-local function realmMode() if not MB.Alpha() or (MB.PlayMode and MB.PlayMode() ~= "open") then return "off" end return MB.Opt("realm", nil) end   -- (the realm only when playing Open)
+-- (0.23) players you have not added: guild and group when playing Open or Friends only, the community only when Open
+local function realmMode() if not MB.Alpha() or (MB.PlayMode and MB.PlayMode() == "solo") then return "off" end return MB.Opt("realm", nil) end
 local function solo() return MB.PlayMode and MB.PlayMode() == "solo" end
-local NOT_YET = "Playing with everyone on the realm is still being tested and comes in a later version. Friends you add with /mb together <name> work now."
+local function communityOK() return not MB.PlayMode or MB.PlayMode() == "open" end
+local NOT_YET = "Playing with players you have not added comes in a later version. Friends you add with /mb together <name> work now."
 local function realmShare() return realmMode() == "on" end
 local function realmShow() local r = realmMode() return r == "on" or r == "watch" end
 local function blocked() local db = MB.DB() db.togetherBlocked = db.togetherBlocked or {} return db.togetherBlocked end
@@ -222,7 +245,20 @@ local function readMe()
     end
     local o = prof.obj
     if m.rd8(o + 8) ~= 0xFF then return nil end
-    return m.rd8(o + 10), m.rd8(o + 9), rd16(o + 16), rd16(o + 18), rd16(o + 20), rd16(o + 22), m.rd8(o + 24) % 16, m.rd8(o + 5)
+    local group, map = m.rd8(o + 10), m.rd8(o + 9)
+    -- (0.23) where the game says I am. Used once it has agreed with the trainer's entry (a door, stairs and starting the
+    -- game all set both), and given up for this game if the two ever disagree just after the trainer's entry changed.
+    local s = me
+    local sb = prof.sb or (prof.sbPtr and rd16(prof.sbPtr) + rd16(prof.sbPtr + 2) * 65536)
+    if s and sb and sb >= 0x02000000 and sb < 0x0203FF00 and s.where ~= false then
+        local sg, sm = m.rd8(sb + 4), m.rd8(sb + 5)
+        local same = sg == group and sm == map
+        local changed = s.objGroup ~= nil and (s.objGroup ~= group or s.objMap ~= map)
+        if same then s.where = true elseif changed then s.where = false end
+        if s.where then group, map = sg, sm end
+    end
+    if s then s.objGroup, s.objMap = m.rd8(o + 10), m.rd8(o + 9) end
+    return group, map, rd16(o + 16), rd16(o + 18), rd16(o + 20), rd16(o + 22), m.rd8(o + 24) % 16, m.rd8(o + 5)
 end
 local function newMe()
     return { events = {}, seq = 0, frame = 0, sentAt = 0, aliveAt = 0, cam = { 0, 0 }, last = nil, C = nil,
@@ -254,19 +290,26 @@ end
 local function send(text)
     if solo() then return end                         -- (How I play: Solo shares nothing)
     local done, now = {}, GetTime()
-    if realmShare() and GetChannelName then           -- (looked up fresh: a stale number was refused as "bad channel")
-        local n = GetChannelName(REALM_CHANNEL)
-        realm.num = type(n) == "number" and n or 0
-    end
-    local onChannel = realmShare() and realm.num > 0
-    if onChannel then
-        local refused = MB.Link.Send(text, "CHANNEL", realm.num, LANE)
-        realm.sent = realm.sent + 1
-        if refused then realm.refused = refused end
+    -- players met (not added) on my map, or on the one I just left (so they see me go): the latest heard first
+    if realmShare() and me and me.map then
+        local mk, list = myKey(me), {}
+        local left = me.leftKey and now - (me.leftAt or -100) < 10 and me.leftKey
+        for k, p in pairs(strangers) do
+            if not friends[k] and not blocked()[k] and p.spelling and now - (p.heard or 0) < PEER_KEEP and (p.via ~= "community" or communityOK())
+               and (p.place == mk or (left and p.place == left)) and not MB.Link.Unreachable(p.spelling) then
+                list[#list + 1] = p
+            end
+        end
+        table.sort(list, function(a, b) return (a.heard or 0) > (b.heard or 0) end)
+        for i = 1, math.min(#list, PEER_SEND) do
+            local p = list[i]
+            local refused = MB.Link.Send(text, "WHISPER", p.spelling, p.lane or LANE)
+            realm.sent = realm.sent + 1
+            p.sent = (p.sent or 0) + 1
+            if refused then p.refused, realm.refused = refused, refused end
+        end
     end
     for _, f in pairs(friends) do
-        -- (a friend heard on the channel lately hears my channel messages too: no whisper needed)
-        if onChannel and f.viaRealmAt and now - f.viaRealmAt < 15 then done[f] = true end
         if f.spelling and not done[f] and not MB.Link.Unreachable(f.spelling) then
             done[f] = true
             local refused = MB.Link.Send(text, "WHISPER", f.spelling, LANE)
@@ -338,11 +381,13 @@ function G.Frame(machine, render)
         if s.map then
             if s.stepping and not s.stepping.len then s.stepping.len = s.frame - s.stepping.at end
             packet(s)
+            s.leftKey, s.leftAt = myKey(s), now          -- (players there still hear where I went, for a few seconds)
         end
         s.group, s.map, s.x, s.y, s.facing, s.gid = group, map, x, y, facing, gid
         s.events, s.stepping, s.C, s.CShown = {}, nil, nil, nil
         packet(s, true)
         dirty = true
+        G.helloDue = true                                -- (the players I know of hear where I am now: G.HelloTick)
         return
     end
     if gid ~= s.gid then
@@ -406,33 +451,20 @@ local function prune(g, now)
 end
 function G.Heard(text, channel, sender)
     if text:sub(1, 3) == "GP;" then G.ProbeHeard(text, channel, sender) return end
+    if text:sub(1, 3) == "GH;" then G.HelloHeard(text, channel, sender) return end
     if not on or solo() then return end
-    local viaRealm = channel == "CHANNEL"
+    if channel ~= "WHISPER" then return end
     local now = GetTime()
-    if viaRealm then
-        if not realmShow() then return end
-        if MB.Link.IsMe(sender) then realm.echoAt = now return end    -- (my own, back from the server: the channel works)
-    elseif channel ~= "WHISPER" then return end
     local f, key = friendOf(sender)
     if not f then
-        if not viaRealm then return end           -- (whispers: only friends you added are drawn)
+        -- (not a friend: drawn only if met through a "here I am", while playing with others)
+        if not realmShow() then return end
         key = MB.Link.Plain(sender)
         if blocked()[key] then return end
         f = strangers[key]
-        if not f then
-            local n, stalest, sk = 0, nil, nil
-            for k, o in pairs(strangers) do
-                n = n + 1
-                if not stalest or (o.heard or 0) < stalest then stalest, sk = o.heard or 0, k end
-            end
-            if n >= REALM_KEEP and sk then strangers[sk] = nil ghosts[sk] = nil end
-            f = { name = sender, stranger = true }
-            strangers[key] = f
-        end
-    elseif viaRealm then
-        f.viaRealmAt = now
+        if not f or (f.via == "community" and not communityOK()) then return end
+        realm.heard[key] = now
     end
-    if viaRealm then realm.heard[key] = now end
     -- no more than four a second from anyone, and each packet once (a friend's may come both ways)
     if f.winAt and now - f.winAt < 1 then
         f.winN = f.winN + 1
@@ -461,6 +493,7 @@ function G.Heard(text, channel, sender)
     g.heard, g.gid, g.family, g.state = now, gid, fam, tonumber(state) or 0
     if g.state == 3 then ghosts[key] = nil dirty = true return end         -- (they left: gone at once)
     local mapKey = placeKey(fam, group, map)
+    f.place = mapKey                              -- (where they are now: whether my steps go to them, GBA/Ghosts send)
     -- this packet's moves, timed from when they happened
     local base = now + DELAY
     local list, cx, cy, i = {}, x, y, 1
@@ -1198,6 +1231,7 @@ function G.MachineChanged(machine, sysKind)
         m, prof, kind = machine, p, "gb"
         SW, SH, AX, AY, BASEH = 160, 144, 64, 60, 16
         me = newMe()
+        G.GameStarted()
         return
     end
     if sysKind ~= "gba" or not machine.romBanks then return end
@@ -1208,6 +1242,14 @@ function G.MachineChanged(machine, sysKind)
     prof, kind = p, "gba"
     SW, SH, AX, AY, BASEH = 240, 160, 112, 56, 32
     me = newMe()
+    G.GameStarted()
+end
+-- a game Together knows started: say hello soon, and (playing Open, not in the community) show the join link once
+function G.GameStarted()
+    G.helloDue = true
+    if on and realmShow() and C_Timer and C_Timer.After then
+        C_Timer.After(4, function() if G.CharacterCheck then pcall(G.CharacterCheck) end end)
+    end
 end
 
 -- ---- friends ----
@@ -1292,41 +1334,262 @@ local function addFriend(name, unit)
 end
 MB.onLogin[#MB.onLogin + 1] = function()
     for key, name in pairs(MB.DB().ghostFriends or {}) do friends[key] = { name = name } end
+    -- (0.23) picked Open before 0.23: the first-time questions set the realm but never switched Together on. Switched on
+    -- once now, unless it was switched off by hand (opt.ghosts false).
+    local opt = MB.DB().opt
+    if opt.ghosts == nil and opt.realm == "on" and MB.PlayMode and MB.PlayMode() == "open" then opt.ghosts = true end
     if MB.Opt("ghosts", false) and (next(friends) or realmShow()) then on = true end         -- (as you left it last time)
 end
 
--- ---- the realm ----
+-- ---- meeting players: the community, the guild, the group (0.23) ----
+-- (0.22's hidden channel: left once a session if we are still in it, and its notices kept out of the chat)
 local function chanNumber()
     if not GetChannelName then return 0 end
     local n = GetChannelName(REALM_CHANNEL)
     return type(n) == "number" and n or 0
 end
 local function ourChannel(name) return type(name) == "string" and name:lower():find(REALM_CHANNEL:lower(), 1, true) ~= nil end
-local function hideChannel()          -- (it carries hidden messages only: kept out of every chat window)
-    if not ChatFrame_RemoveChannel then return end
-    for i = 1, (NUM_CHAT_WINDOWS or 1) do
-        local cf = _G and _G["ChatFrame" .. i] or (i == 1 and DEFAULT_CHAT_FRAME)
-        if cf then pcall(ChatFrame_RemoveChannel, cf, REALM_CHANNEL) end
+local function secret(v) return issecretvalue and issecretvalue(v) end
+
+-- the community for this character: which ruleset the realm is, and the invite code for its faction and ruleset
+-- realms by their exact name (GetRealmName); any other realm is read from its name below
+local REALM_RULES = {
+    ["CAMWOW US2 Realm 6 PvP"] = "PvP",
+    ["CAMWOW US2 Realm 9 RP PvP"] = "RPPvP",
+    ["CAMWOW US1 Realm 5 PvE"] = "PvE",
+    ["CAMWOW US2 Realm 11 RP"] = "RP",
+}
+local function ruleset()
+    local r = GetRealmName and GetRealmName()
+    if type(r) ~= "string" or secret(r) then return "PvP" end
+    if REALM_RULES[r] then return REALM_RULES[r] end
+    if r:find("[Hh]ardcore") then return "Hardcore" end
+    local pvp = r:find("PvP") or r:find("PVP")
+    if pvp and r:find("RP") then return "RPPvP" end
+    if pvp then return "PvP" end
+    if r:find("RP") then return "RP" end
+    return "PvE"
+end
+local function faction()
+    local f = UnitFactionGroup and UnitFactionGroup("player")
+    return (f == "Alliance" or f == "Horde") and f or nil
+end
+function G.CommunityCode()
+    local f = faction()
+    return f and COMMUNITIES[f] and COMMUNITIES[f][ruleset()] or nil, f, ruleset()
+end
+-- the MekkaBoyTogether community I am in, if any: { clubId, name }
+function G.Community()
+    if not (C_Club and C_Club.GetSubscribedClubs) then return nil end
+    local ok, clubs = pcall(C_Club.GetSubscribedClubs)
+    if not ok or type(clubs) ~= "table" then return nil end
+    local best
+    for _, c in ipairs(clubs) do
+        local name = c.name
+        if type(name) == "string" and not secret(name) and name:sub(1, #COMMUNITY_NAME) == COMMUNITY_NAME
+           and (c.clubType == nil or c.clubType == 1) then
+            -- (one for my faction and ruleset first, should someone be in several)
+            local f = faction()
+            if not best or (f and name:find(f, 1, true) and name:find(ruleset(), 1, true)) then best = c end
+        end
+    end
+    return best
+end
+-- the link that opens Blizzard's invitation (the player then clicks Join: joining is always their own click)
+function G.CommunityLink()
+    local code = G.CommunityCode()
+    if not code then return nil end
+    return ("|cffffd100|HclubTicket:%s|h[Join MekkaBoyTogether]|h|r"):format(code)
+end
+-- (0.23 dev1 opened Blizzard's invitation from MekkaBoy's own button: Blizzard then refused the invitation as an addon's
+-- action, ADDON_ACTION_FORBIDDEN on GetLastTicketResponse, and the session stayed tainted until /reload. Only a click on
+-- the link in the chat window goes through Blizzard's own code, so that link is the way in, and nothing here opens it.)
+-- Communities belong to characters, not accounts: each character is offered its own faction's and ruleset's community
+-- once (remembered in MekkaBoyDB.togetherChars, by realm and name), the first time MekkaBoy opens on it playing Open. A
+-- character offered nothing (no community for it yet) is offered again once one exists (a later version adds the code).
+local function charRecord()
+    local db = MB.DB()
+    db.togetherChars = db.togetherChars or {}
+    local a, b = nil, nil
+    if UnitName then a, b = UnitName("player") end
+    local name = (type(a) == "string" and a or "?") .. ((type(b) == "string" and b ~= "") and (" " .. b) or "")
+    local r = GetRealmName and GetRealmName()
+    local key = (type(r) == "string" and not secret(r) and r or "?") .. "/" .. name
+    db.togetherChars[key] = db.togetherChars[key] or {}
+    return db.togetherChars[key]
+end
+-- (the server sends the list of communities a little after logging in: until then "not in one" is not to be believed)
+local loginAt, clubsLoaded = nil, false
+local function clubsReady() return clubsLoaded or (loginAt and GetTime() - loginAt > 20) end
+-- say how to meet other players: the join link, or that you are in already. why: "onboarding", "character" (once per
+-- character), "on" (Together or realm switched on) or "ask" (/mb together join)
+function G.OfferCommunity(why)
+    if solo() then return end
+    if not communityOK() then
+        if why == "ask" then Print("The MekkaBoyTogether community is for playing Open: /mb play open. Your guild and group show up meanwhile.") end
+        return
+    end
+    local rec = charRecord()
+    local c = G.Community()
+    if c then
+        rec.joined = c.name
+        if why == "ask" then Print(("You're in %s: members playing the same game on your map show up in your game."):format(c.name)) end
+        return
+    end
+    local link, f, rules = G.CommunityLink(), faction(), ruleset()
+    if not link then
+        if why == "character" and rec.offered == "none" then return end
+        rec.offered = "none"
+        Print(("There is no MekkaBoyTogether community for %s %s yet. Your guild, your group and friends you add (/mb together <name>) show up in the meantime."):format(f or "your faction", rules))
+        return
+    end
+    local code = G.CommunityCode()
+    if why == "character" and rec.offered == code then return end
+    rec.offered, rec.at = code, date and date("%Y-%m-%d") or true
+    Print(("Meet other MekkaBoy players: %s - click it, then Join. Members playing the same game on your map show up in your game."):format(link))
+    if G.ShowJoinCard then pcall(G.ShowJoinCard) end
+end
+-- this character's turn: once, when MekkaBoy opens or a game Together knows starts (after the first-time questions)
+function G.CharacterCheck()
+    if MB.Onboarded and not MB.Onboarded() then return end      -- (the first-time questions offer it themselves)
+    if solo() or not on or not realmShow() or not communityOK() then return end
+    if not clubsReady() then
+        if C_Timer and C_Timer.After and not G.checkWaiting then
+            G.checkWaiting = true
+            C_Timer.After(10, function() G.checkWaiting = false pcall(G.CharacterCheck) end)
+        end
+        return
+    end
+    G.OfferCommunity("character")
+end
+do
+    local ev = CreateFrame("Frame")
+    pcall(ev.RegisterEvent, ev, "INITIAL_CLUBS_LOADED")
+    pcall(ev.RegisterEvent, ev, "PLAYER_LOGIN")
+    ev:SetScript("OnEvent", function(_, event)
+        if event == "PLAYER_LOGIN" then loginAt = loginAt or GetTime() else clubsLoaded = true end
+    end)
+    if MB.window and MB.window.HookScript then
+        MB.window:HookScript("OnShow", function()
+            if C_Timer and C_Timer.After then C_Timer.After(1, function() pcall(G.CharacterCheck) end) end
+        end)
     end
 end
--- in the channel while the realm is chosen and a game Together knows has been started (then kept until switched off)
-function G.RealmTick()
-    local now = GetTime()
-    realm.num = chanNumber()
-    local want = on and realmShow()
-    if want and (prof or realm.mine) then
-        if realm.num == 0 and JoinTemporaryChannel and now - (realm.joinAt or -99) > 15 then
-            realm.joinAt, realm.joins, realm.mine, realm.hidden = now, realm.joins + 1, true, false
-            pcall(JoinTemporaryChannel, REALM_CHANNEL)
-            realm.num = chanNumber()
+
+-- "here I am": GH;1;<my map, as placeKey writes it, or empty>;<q (answer me) or a (an answer)><s (shown) or w (watching)>
+local laneTurn = 0
+local function nextLane()
+    local first, n = MB.Link.TOGETHER_FIRST or LANE, MB.Link.TOGETHER_LANES or 1
+    laneTurn = laneTurn % n + 1
+    return first + laneTurn - 1
+end
+local function helloText(kind)
+    local place = (prof and me and me.map) and myKey(me) or ""
+    return ("GH;1;%s;%s%s"):format(place, kind, realmShare() and "s" or "w")
+end
+local function viaOf(channel)
+    if channel == "GUILD" or channel == "OFFICER" then return "guild" end
+    if channel == "PARTY" or channel == "RAID" or channel == "INSTANCE_CHAT" then return "group" end
+    return nil
+end
+local function meet(sender, via)
+    local key = MB.Link.Plain(sender)
+    local p = strangers[key]
+    if not p then
+        local n, stalest, sk = 0, nil, nil
+        for k, o in pairs(strangers) do
+            n = n + 1
+            if not stalest or (o.heard or 0) < stalest then stalest, sk = o.heard or 0, k end
         end
-        if realm.num > 0 and not realm.hidden then hideChannel() realm.hidden = true end
-    elseif not want and realm.mine and realm.num > 0 then
-        if LeaveChannelByName then pcall(LeaveChannelByName, REALM_CHANNEL) end
-        realm.mine, realm.num = false, 0
+        if n >= REALM_KEEP and sk then strangers[sk] = nil ghosts[sk] = nil end
+        p = { name = sender, stranger = true, lane = nextLane(), via = via }
+        strangers[key] = p
     end
-    for k, f in pairs(strangers) do
-        if now - (f.heard or 0) > 120 then strangers[k] = nil end
+    p.spelling = sender
+    if via then p.via = via end
+    return p, key
+end
+function G.HelloHeard(text, channel, sender)
+    if MB.Link.IsMe(sender) then return end
+    local place, kind, mode = text:match("^GH;%d+;([%w%.]*);([qa])([sw])")
+    if not kind then return end
+    realm.answers = realm.answers + 1
+    if solo() or not on or not realmShow() then return end
+    local key = MB.Link.Plain(sender)
+    if friendOf(sender) or blocked()[key] then return end    -- (friends you added are reached anyway)
+    local now = GetTime()
+    local via = viaOf(channel) or (strangers[key] and strangers[key].via) or "community"
+    if via == "community" and not communityOK() then return end
+    local p = meet(sender, via)
+    p.heard, p.place, p.watch = now, place ~= "" and place or nil, mode == "w"
+    realm.heard[key] = now
+    if kind == "q" and now - (p.answeredAt or -100) > 20 then
+        p.answeredAt = now
+        MB.Link.Send(helloText("a"), "WHISPER", p.spelling, p.lane)
+    end
+end
+
+-- whom to tell: online members of the community, a few at a time, in turn (not myself, not those met already)
+local function communityTurn(count)
+    local c = G.Community()
+    if not c or not C_Club.GetClubMembers then return {} end
+    if not realm.subscribed and C_Club.SetClubPresenceSubscription and not (CommunitiesFrame and CommunitiesFrame:IsShown()) then
+        realm.subscribed = pcall(C_Club.SetClubPresenceSubscription, c.clubId)
+    end
+    local ok, ids = pcall(C_Club.GetClubMembers, c.clubId)
+    if not ok or type(ids) ~= "table" then return {} end
+    local online = {}
+    for _, id in ipairs(ids) do
+        local ok2, info = pcall(C_Club.GetMemberInfo, c.clubId, id)
+        if ok2 and type(info) == "table" and not info.isSelf and type(info.name) == "string" and not secret(info.name)
+           and (info.presence == 1 or info.presence == 4 or info.presence == 5) then
+            local key = MB.Link.Plain(info.name)
+            if not strangers[key] and not friends[key] and not blocked()[key] then online[#online + 1] = info.name end
+        end
+    end
+    realm.members = #ids
+    realm.online = #online
+    table.sort(online)
+    local out = {}
+    for i = 1, math.min(count, #online) do
+        realm.turn = realm.turn % #online + 1
+        out[#out + 1] = online[realm.turn]
+    end
+    return out
+end
+function G.HelloTick()
+    local now = GetTime()
+    if not realm.leftOld and chanNumber() > 0 and LeaveChannelByName then
+        realm.leftOld = true
+        pcall(LeaveChannelByName, REALM_CHANNEL)
+    end
+    for k, p in pairs(strangers) do
+        if now - (p.heard or 0) > PEER_KEEP then strangers[k] = nil ghosts[k] = nil end
+    end
+    if solo() or not on or not realmShow() or not (prof and me and me.map) then return end
+    if not (G.helloDue and now - realm.helloAt >= HELLO_SOON) and now - realm.helloAt < HELLO_EVERY then return end
+    local changed = G.helloDue
+    G.helloDue = false
+    realm.helloAt = now
+    local text = helloText("q")
+    realm.hellos = realm.hellos + 1
+    if IsInGuild and IsInGuild() then MB.Link.Send(text, "GUILD", nil, nextLane()) end
+    if IsInRaid and IsInRaid() then MB.Link.Send(text, "RAID", nil, nextLane())
+    elseif IsInGroup and IsInGroup() then MB.Link.Send(text, "PARTY", nil, nextLane()) end
+    -- players met already: every one, on a new map (they may be on it); the rest of the time they hear my steps
+    if changed or now - (realm.knownAt or -100) >= HELLO_EVERY then
+        realm.knownAt = now
+        local list = {}
+        for _, p in pairs(strangers) do
+            if p.spelling and not MB.Link.Unreachable(p.spelling) and (p.via ~= "community" or communityOK()) then list[#list + 1] = p end
+        end
+        table.sort(list, function(a, b) return (a.heard or 0) > (b.heard or 0) end)
+        for i = 1, math.min(#list, 15) do MB.Link.Send(text, "WHISPER", list[i].spelling, list[i].lane) end
+    end
+    -- community members not met yet: a few each minute, in turn
+    if communityOK() and now - realm.roundAt >= HELLO_EVERY then
+        realm.roundAt = now
+        for _, name in ipairs(communityTurn(COMMUNITY_EACH)) do MB.Link.Send(text, "WHISPER", name, nextLane()) end
     end
 end
 do
@@ -1335,35 +1598,59 @@ do
         wait = wait - (e or 0)
         if wait > 0 then return end
         wait = 2
-        pcall(G.RealmTick)
+        pcall(G.HelloTick)
     end)
-    if ChatFrame_AddMessageEventFilter then          -- (the channel's join and leave notices stay out of chat too)
+    local addFilter = ChatFrame_AddMessageEventFilter or (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter)
+    if addFilter then                                -- (0.22's channel: its join and leave notices stay out of chat)
         local function quiet(_, _, _, _, _, chanString, _, _, _, _, chanName)
             return ourChannel(chanName) or ourChannel(chanString)
         end
         for _, e in ipairs({ "CHAT_MSG_CHANNEL_NOTICE", "CHAT_MSG_CHANNEL_NOTICE_USER", "CHAT_MSG_CHANNEL" }) do
-            ChatFrame_AddMessageEventFilter(e, quiet)
+            addFilter(e, quiet)
         end
+    end
+    -- joined the community: say so once, and meet its members straight away
+    local ev = CreateFrame("Frame")
+    if pcall(ev.RegisterEvent, ev, "CLUB_ADDED") then
+        ev:SetScript("OnEvent", function()
+            if C_Timer and C_Timer.After then
+                C_Timer.After(1, function()
+                    local c = G.Community()
+                    if c and not realm.toldJoined then
+                        realm.toldJoined, realm.roundAt = true, -100
+                        if G.HideJoinCard then pcall(G.HideJoinCard) end
+                        Print(("You joined %s. Members playing the same game on your map show up in your game."):format(c.name))
+                    end
+                end)
+            end
+        end)
     end
 end
 function G.RealmLine()
-    if not MB.Alpha() then return "Realm: not in this version (friends you add work)" end
+    if not MB.Alpha() then return "Players you have not added: not in this version (friends you add work)" end
     local mode = realmMode()
-    if mode == nil then return "Realm: not chosen yet (you are asked when you start a game Together knows)" end
-    if mode == "off" then return "Realm: off (only friends you add). /mb together realm on to play with everyone on the realm" end
-    local now, players = GetTime(), 0
-    for _, t in pairs(realm.heard) do if now - t < 60 then players = players + 1 end end
-    local chan = realm.num > 0 and ("channel #" .. realm.num) or (realm.joins > 0 and "joining the channel" or "channel not joined yet (start a game Together knows)")
-    return ("Realm: %s, %s; %d players heard in the last minute; your own messages come back: %s; sent %d%s"):format(
-        mode == "watch" and "watching (you are not shown)" or "on", chan, players,
-        realm.echoAt and (now - realm.echoAt < 60 and "yes" or "not lately") or "not yet", realm.sent,
+    if mode == nil then return "Players you have not added: not chosen yet (/mb together realm on)" end
+    if mode == "off" then return "Players you have not added: off (only friends you add). /mb together realm on to meet others" end
+    local now, players, here = GetTime(), 0, 0
+    local mk = prof and me and me.map and myKey(me)
+    for k, t in pairs(realm.heard) do
+        if now - t < 120 then
+            players = players + 1
+            if strangers[k] and strangers[k].place == mk then here = here + 1 end
+        end
+    end
+    local c = G.Community()
+    local where = c and (("community %s (%s online of %s)"):format(c.name, tostring(realm.online or "?"), tostring(realm.members or "?")))
+        or (G.CommunityCode() and "not in the community yet (/mb together join)" or "no community for your faction and ruleset yet")
+    return ("Players you have not added: %s; %s; %d heard lately, %d on your map; %d hellos sent, steps sent %d%s"):format(
+        mode == "watch" and "watching (you are not shown)" or "on", where, players, here, realm.hellos, realm.sent,
         realm.refused and (" (the server refused one: " .. tostring(realm.refused) .. ")") or "")
 end
 
 local REALM_SAY = {
-    on = "Playing together with the realm: other MekkaBoy players on the same map see your trainer, and you see theirs. To play on your own: /mb together realm off. To see others without being seen: /mb together realm watch.",
-    watch = "Watching the realm: you see other MekkaBoy players on your map; they do not see you (friends you added still do). /mb together realm on to be seen too, /mb together realm off to see nobody from the realm.",
-    off = "Playing on your own. To play with other MekkaBoy players on the realm: /mb together realm on. Friends you add with /mb together <name> still work.",
+    on = "Playing with others: MekkaBoy players from your guild, your group and the MekkaBoyTogether community who are on your map see your trainer, and you see theirs. To play with friends you add only: /mb together realm off. To see others without being seen: /mb together realm watch.",
+    watch = "Watching: you see MekkaBoy players from your guild, your group and the community on your map; they do not see you (friends you added still do). /mb together realm on to be seen too, /mb together realm off to see only friends you add.",
+    off = "Only friends you add: /mb together <name>. To meet other MekkaBoy players too: /mb together realm on.",
 }
 local function setRealm(mode, quiet)
     if mode ~= "on" and realmShare() then pcall(G.SayBye) end    -- (no longer shown: the goodbye goes out while it still can)
@@ -1374,9 +1661,11 @@ local function setRealm(mode, quiet)
         strangers = {}
     end
     dirty = true
-    pcall(G.RealmTick)
+    G.helloDue, realm.roundAt = true, -100
     if not quiet then Print(REALM_SAY[mode]) end
+    if mode ~= "off" and not quiet then G.OfferCommunity("on") end
 end
+G.SetRealm = setRealm
 
 -- The first time a game Together knows starts: one question, before the game runs.
 local question
@@ -1384,7 +1673,7 @@ local function ask(resume)
     if not question then
         local parent = MB.window or UIParent
         local q = CreateFrame("Frame", nil, parent)
-        q:SetSize(330, 150)
+        q:SetSize(330, 166)
         q:SetPoint("CENTER", parent, "CENTER", 0, 20)
         q:SetFrameStrata("DIALOG")
         q:EnableMouse(true)
@@ -1397,11 +1686,11 @@ local function ask(resume)
         edge:SetColorTexture(0.18, 0.13, 0.07, 0.96)
         local title = q:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
         title:SetPoint("TOP", q, "TOP", 0, -14)
-        title:SetText("Play with others on the realm?")
+        title:SetText("Play with other MekkaBoy players?")
         local body = q:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         body:SetPoint("TOP", title, "BOTTOM", 0, -10)
         body:SetWidth(300)
-        body:SetText("Other MekkaBoy players on the same map would see your trainer walking in their game, and you would see theirs.")
+        body:SetText("MekkaBoy players from your guild, your group and the MekkaBoyTogether community who are on the same map would see your trainer walking in their game, and you would see theirs.")
         local function button(label, x, mode)
             local b = CreateFrame("Button", nil, q)
             b:SetSize(140, 26)
@@ -1538,14 +1827,15 @@ local function together(rest)
         elseif what == "probe" then
             G.Probe()
         elseif what == "who" then
-            if realm.num > 0 and ListChannelByName then
-                Print("Asking the server who is in the realm channel (the list comes in chat):")
-                pcall(ListChannelByName, REALM_CHANNEL)
-            else Print("Not in the realm channel yet. " .. G.RealmLine()) end
+            Print(G.RealmLine())
+            for _, line in ipairs(G.MetLines()) do Print("  " .. line) end
         else
             Print(G.RealmLine())
-            Print("/mb together realm on | watch | off; realm who lists who the server has in the channel; realm probe tests which routes reach other players.")
+            Print("/mb together realm on | watch | off; realm who lists the MekkaBoy players met lately; realm probe tests which routes reach other players; /mb together join shows the community's join link.")
         end
+        return
+    elseif word == "join" or word == "community" then
+        G.OfferCommunity("ask")
         return
     elseif word:sub(1, 6) == "block " or word:sub(1, 8) == "unblock " then
         local un = word:sub(1, 2) == "un"
@@ -1554,7 +1844,7 @@ local function together(rest)
         local key = MB.Link.Plain(name)
         blocked()[key] = (not un) and name or nil
         if not un then ghosts[key] = nil strangers[key] = nil dirty = true end
-        Print(un and ("%s is no longer blocked."):format(name) or ("%s is blocked: never drawn from the realm. /mb together unblock %s undoes it."):format(name, name))
+        Print(un and ("%s is no longer blocked."):format(name) or ("%s is blocked: never drawn unless you add them. /mb together unblock %s undoes it."):format(name, name))
         return
     elseif word == "off" then
         pcall(G.SayBye)
@@ -1566,6 +1856,7 @@ local function together(rest)
         Print("Together: " .. G.Why())
         Print("  " .. G.RealmLine())
         for _, line in ipairs(G.FriendLines()) do Print("  " .. line) end
+        for _, line in ipairs(G.MetLines(true)) do Print("  " .. line) end
         return
     elseif word == "names on" or word == "names off" then
         MB.DB().opt.ghostNames = (word == "names on")
@@ -1581,17 +1872,24 @@ local function together(rest)
         Print(("%s forgotten."):format(name))
         return
     elseif word == "on" or word == "" or word == "list" or word == "help" then
+        if word == "help" then Print("/mb together <name> adds a friend; on, off, why; join; names on|off; forget <name>; realm on|watch|off|who; block|unblock <name>.") return end
         local list = {}
         for _, f in pairs(friends) do list[#list + 1] = MB.Link.Short(f.name) end
-        if #list == 0 then Print("/mb together <name> adds a friend (they add you too). Then you see each other walking in the same Pokemon game.") return end
-        if word == "help" then Print("/mb together <name> adds a friend; on, off, why; names on|off; forget <name>; realm on|watch|off|who; block|unblock <name>.") return end
-        if word ~= "list" then
+        table.sort(list)
+        -- (0.23: "on" switches Together on even with no friends added: players you meet show up too)
+        if word == "on" then
             on, failed = true, false
             MB.DB().opt.ghosts = true
             for _, f in pairs(friends) do if not f.spelling then G.Ask(f) end end
+            G.helloDue = true
         end
-        Print(("Together mode %s, with: %s. You see friends playing a game from the same group: Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald."):format(on and "on" or "off", table.concat(list, ", ")))
+        local who = #list > 0 and ("friends you added: " .. table.concat(list, ", ")) or "no friends added yet (/mb together <name>)"
+        Print(("Together mode %s; %s. You see players in a game from the same group: Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen, Ruby/Sapphire/Emerald."):format(on and "on" or "off", who))
         if on and m and not prof then Print("Together does not know this game yet.") end
+        if on and word == "on" then
+            if realmShow() then G.OfferCommunity("on")
+            elseif MB.Alpha() then Print("To meet other MekkaBoy players too: /mb together realm on.") end
+        end
         return
     end
     if word == "target" then
@@ -1636,7 +1934,8 @@ function G.Why()          -- (for tests and /mb together why: what stops friends
     local n, same, waiting = 0, 0, 0
     for _, g in pairs(ghosts) do n = n + 1 if g.skey == myKey(s) then same = same + 1 end end
     for _, f in pairs(friends) do if not f.spelling then waiting = waiting + 1 end end
-    return ("ok: %d friends drawn, %d on your map (%s); %d friends not reached yet"):format(n, same, myKey(s), waiting)
+    local where = kind == "gba" and (s.where == true and "; location: the game's own" or s.where == false and "; location: the trainer's (the game's did not match)" or "; location: the trainer's until a door checks the game's") or ""
+    return ("ok: %d drawn, %d on your map (%s); %d friends not reached yet%s"):format(n, same, myKey(s), waiting, where)
 end
 -- one line per friend: found or not, which spelling, walk messages sent to them and heard from them
 function G.FriendLines()
@@ -1646,11 +1945,141 @@ function G.FriendLines()
         if not f.spelling then reach = "not found yet"
         elseif MB.Link.Unreachable(f.spelling) then reach = ("found as \"%s\", but the server just said nobody is online by that name"):format(f.spelling)
         else reach = ("found as \"%s\""):format(f.spelling) end
-        out[#out + 1] = ("%s: %s; sent %d, heard %d%s%s"):format(MB.Link.Short(f.name), reach, f.sent or 0, f.got or 0,
-            f.heard and (" (last %d s ago)"):format(now - f.heard) or "",
+        out[#out + 1] = ("%s: %s; sent %d, heard %d%s%s%s"):format(MB.Link.Short(f.name), reach, f.sent or 0, f.got or 0,
+            f.heard and (" (last %d s ago)"):format(now - f.heard) or "", G.WhereLine(f),
             f.refused and (" (the server refused one: " .. tostring(f.refused) .. ")") or "")
     end
     table.sort(out)
     return out
 end
+-- (0.23) where a friend or a player met is, next to where I am: "; on your map" or "; on another map (H0.0; you: H0.9)"
+function G.WhereLine(f)
+    if not (f.place and f.heard and GetTime() - f.heard < FORGET) then return "" end
+    local mk = prof and me and me.map and myKey(me)
+    if not mk then return "; on " .. f.place end
+    if f.place == mk then return "; on your map" end
+    return ("; on another map (%s; you: %s)"):format(f.place, mk)
+end
+-- one line per player met lately (not added): how they were met, and where they are
+function G.MetLines(short)
+    local out, now = {}, GetTime()
+    for k, p in pairs(strangers) do
+        if now - (p.heard or 0) < 300 then
+            out[#out + 1] = ("%s (%s): heard %d s ago, steps heard %d, sent %d%s"):format(MB.Link.Short(p.name), p.via or "?",
+                now - (p.heard or now), p.got or 0, p.sent or 0, G.WhereLine(p))
+        end
+    end
+    table.sort(out)
+    if #out == 0 and not short then out[1] = "No MekkaBoy players met in the last five minutes." end
+    if short and #out > 6 then local n = #out for i = n, 7, -1 do out[i] = nil end out[7] = ("and %d more: /mb together realm who"):format(n - 6) end
+    return out
+end
 function G.State() return { on = on, me = me, ghosts = ghosts, friends = friends, sheetAt = sheetAt, profile = prof, extras = extras } end
+
+-- ---- the join card (0.23): one job, getting a player into the MekkaBoyTogether community ----
+-- Shown after the first-time questions (playing Open), on /mb together on and realm on, while not in the community.
+-- It points at the gold link in the chat window: a click there opens Blizzard's invitation, and Join is the player's
+-- own click. (An addon's button cannot open it: see G.CommunityLink.) Never shown in combat.
+local card
+local INK, SOFT, LINE, PICK = { 0.91, 0.93, 0.94 }, { 0.70, 0.75, 0.77 }, { 1, 1, 1, 0.22 }, { 0.56, 0.76, 0.82 }
+local function cardButton(parent, label, w, primary)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(w, 28)
+    local face = b:CreateTexture(nil, "BACKGROUND")
+    face:SetAllPoints(b)
+    local glow = b:CreateTexture(nil, "HIGHLIGHT")
+    glow:SetAllPoints(b)
+    glow:SetColorTexture(1, 1, 1, primary and 0.18 or 0.08)
+    local text = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    text:SetPoint("CENTER")
+    text:SetText(label)
+    if primary then
+        face:SetColorTexture(PICK[1], PICK[2], PICK[3], 1)
+        text:SetTextColor(0.06, 0.08, 0.09)
+    else
+        face:SetColorTexture(1, 1, 1, 0.06)
+        text:SetTextColor(SOFT[1], SOFT[2], SOFT[3])
+    end
+    b:SetScript("OnMouseDown", function() text:SetPoint("CENTER", 0, -1) end)
+    b:SetScript("OnMouseUp", function() text:SetPoint("CENTER", 0, 0) end)
+    b.text = text
+    return b
+end
+local function buildCard()
+    local W = 360
+    card = CreateFrame("Frame", "MekkaBoyJoinCard", UIParent)
+    card:SetFrameStrata("DIALOG")
+    card:SetSize(W, 100)
+    card:SetPoint("TOP", UIParent, "TOP", 0, -120)
+    card:EnableMouse(true)
+    card:SetClampedToScreen(true)
+    local bg = card:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(card)
+    bg:SetColorTexture(0.06, 0.08, 0.09, 0.94)
+    for _, e in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true }, { "TOPLEFT", "BOTTOMLEFT" }, { "TOPRIGHT", "BOTTOMRIGHT" } }) do
+        local t = card:CreateTexture(nil, "BORDER")
+        t:SetPoint(e[1], 0, 0) t:SetPoint(e[2], 0, 0)
+        if e[3] then t:SetHeight(1) else t:SetWidth(1) end
+        t:SetColorTexture(LINE[1], LINE[2], LINE[3], LINE[4])
+    end
+    local accent = card:CreateTexture(nil, "BORDER")         -- (a teal rule down the left edge: Together's mark)
+    accent:SetPoint("TOPLEFT", 0, 0) accent:SetPoint("BOTTOMLEFT", 0, 0)
+    accent:SetWidth(3)
+    accent:SetColorTexture(PICK[1], PICK[2], PICK[3], 1)
+    local y = -16
+    local function text(font, str, gap, color)
+        local fs = card:CreateFontString(nil, "OVERLAY", font)
+        fs:SetPoint("TOPLEFT", 20, y)
+        fs:SetWidth(W - 40)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(str)
+        fs:SetTextColor(color[1], color[2], color[3])
+        y = y - (gap or 20)
+        return fs
+    end
+    text("GameFontNormalSmall", "TOGETHER MODE", 18, SOFT)
+    text("GameFontHighlightLarge", "Meet other MekkaBoy players", 26, INK)
+    local body = text("GameFontHighlight", "Join the MekkaBoyTogether community. Members playing the same game on your map show up walking in your game, and you in theirs.", 0, SOFT)
+    y = y - math.max(36, (body:GetStringHeight() or 36)) - 16
+    -- (the step itself: the gold link, in the chat window, where Blizzard lets it work)
+    local step = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    step:SetPoint("TOPLEFT", 20, y)
+    step:SetWidth(W - 40)
+    step:SetJustifyH("LEFT")
+    step:SetTextColor(INK[1], INK[2], INK[3])
+    step:SetText("Click |cffffd100[Join MekkaBoyTogether]|r in your chat window, then Join.")
+    y = y - math.max(18, (step:GetStringHeight() or 18)) - 14
+    local ok = cardButton(card, "Got it", 96, true)
+    ok:SetPoint("TOPLEFT", card, "TOPLEFT", 20, y)
+    local note = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    note:SetPoint("LEFT", ok, "RIGHT", 12, 0)
+    note:SetPoint("RIGHT", card, "RIGHT", -20, 0)
+    note:SetJustifyH("LEFT")
+    note:SetTextColor(SOFT[1], SOFT[2], SOFT[3])
+    note:SetText("Lost the link? /mb together join")
+    card.note = note
+    y = y - 28 - 16
+    card:SetHeight(-y)
+    ok:SetScript("OnClick", function() card:Hide() end)
+    if UISpecialFrames then table.insert(UISpecialFrames, "MekkaBoyJoinCard") end    -- (Escape closes it)
+    local ag = card.CreateAnimationGroup and card:CreateAnimationGroup()
+    if ag then
+        local a = ag:CreateAnimation("Alpha")
+        if a.SetFromAlpha then a:SetFromAlpha(0) a:SetToAlpha(1) else a:SetChange(1) end
+        a:SetDuration(0.14)
+        if a.SetSmoothing then a:SetSmoothing("OUT") end
+        if ag.SetToFinalAlpha then ag:SetToFinalAlpha(true) end
+        card.fade = ag
+    end
+    card:Hide()
+end
+function G.ShowJoinCard()
+    if InCombatLockdown and InCombatLockdown() then return end
+    if G.Community() or not G.CommunityCode() then return end
+    if not card then buildCard() end
+    if card:IsShown() then return end
+    card:Show()
+    if card.fade then card.fade:Stop() card.fade:Play() end
+end
+function G.HideJoinCard() if card then card:Hide() end end
+function G.JoinCard() return card end      -- (for tests)

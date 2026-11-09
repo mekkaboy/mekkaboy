@@ -4,7 +4,8 @@
 -- rarer than a version change.
 --
 -- Where (0.22.2): a party or raid, as before (both sides say who they are, whenever the group grows); and, once a
--- session each, the guild and Together's hidden realm channel ("MekkaBoyTogether", GBA/Ghosts.lua). Friends.lua's
+-- session, the guild. (0.22.2 also spoke on Together's hidden realm channel; Classic does not carry addon messages on chat
+-- channels, so 0.23 no longer does. A test build, whose version says "dev" or "test", tells nobody.) Friends.lua's
 -- "who has MekkaBoy" answers carry a version too, and are checked the same way (Hello.Seen). Solo (How I play) says
 -- nothing in the guild or on the channel.
 --
@@ -23,10 +24,8 @@ MB.Hello = Hello
 local Print = MB.Print
 
 Hello.WHERE = "mekkaboy.com"       -- where to get MekkaBoy: said with every "newer version" line
-local REALM_CHANNEL = "MekkaBoyTogether"   -- Together's hidden channel (GBA/Ghosts.lua)
 local LANE = 5                     -- the guild and the channel go out on the extra addon name (GB/Link.lua)
 local ANNOUNCE_AFTER, ANNOUNCE_SPREAD = 20, 20   -- the guild hears from us 20 to 40 s after logging in
-local CHANNEL_LOOK = 60            -- seconds between looks for Together's channel, until we have spoken on it
 local REPLY_MIN, REPLY_SPREAD = 3, 12            -- an answer to an older copy waits 3 to 15 s ...
 local REPLY_GAP = 300              -- ... and goes out at most once in five minutes in each place
 
@@ -84,14 +83,14 @@ local function say(kind)
 end
 
 -- the guild and Together's channel: whether we may speak there, and how to reach it
-local function quiet() return MB.PlayMode and MB.PlayMode() == "solo" end
+local function quiet()
+    if tostring(MB.VERSION):find("dev") or tostring(MB.VERSION):find("test") then return true end   -- (not a release)
+    return MB.PlayMode and MB.PlayMode() == "solo"
+end
 local function reach(where)
     if quiet() or not (MB.Link and MB.Link.Send) then return nil end
     if where == "GUILD" then
         if IsInGuild and IsInGuild() then return "GUILD" end
-    elseif where == "CHANNEL" and GetChannelName then
-        local n = GetChannelName(REALM_CHANNEL)
-        if type(n) == "number" and n > 0 then return "CHANNEL", n end
     end
     return nil
 end
@@ -173,17 +172,12 @@ local function soon()
     after(2, ask)
 end
 
--- once a session: the guild a little after logging in; Together's channel whenever we turn out to be on it
+-- once a session: the guild a little after logging in
 local started = false
-local function lookForChannel()
-    if announce("CHANNEL") then return end
-    after(CHANNEL_LOOK, lookForChannel)
-end
 local function start()
     if started then return end
     started = true
     after(ANNOUNCE_AFTER + math.random() * ANNOUNCE_SPREAD, function() announce("GUILD") end)
-    after(CHANNEL_LOOK, lookForChannel)
 end
 
 local ev = CreateFrame("Frame")

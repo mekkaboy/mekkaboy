@@ -528,9 +528,14 @@ function Link.Ping(target)
     Print(("Testing the link with %s. This takes about a minute."):format(test.target))
 end
 
+-- (0.23) Together's own lanes, 6 to 13: one per player it whispers to, in turn. The server lets each addon name send
+-- about one message a second (after a burst of ten), so walking with several players needs several names.
+local TOGETHER_FIRST, TOGETHER_LANES = 6, 8
+Link.TOGETHER_FIRST, Link.TOGETHER_LANES = TOGETHER_FIRST, TOGETHER_LANES
 local OURS = {}             -- addon name -> lane number
 for lane = 1, LANES do OURS[laneName(lane)] = lane end
 OURS[laneName(EXTRA_LANE)] = EXTRA_LANE
+for lane = TOGETHER_FIRST, TOGETHER_FIRST + TOGETHER_LANES - 1 do OURS[laneName(lane)] = lane end
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("CHAT_MSG_ADDON")
 ev:RegisterEvent("CHAT_MSG_ADDON_LOGGED")
@@ -550,6 +555,7 @@ if RegisterPrefix then
     diag.registered = tostring(ok and r or ("error: " .. tostring(r)))
     for lane = 2, LANES do pcall(RegisterPrefix, laneName(lane)) end
     pcall(RegisterPrefix, laneName(EXTRA_LANE))
+    for lane = TOGETHER_FIRST, TOGETHER_FIRST + TOGETHER_LANES - 1 do pcall(RegisterPrefix, laneName(lane)) end
 end
 if C.IsAddonMessagePrefixRegistered then
     diag.isRegistered = function() return C.IsAddonMessagePrefixRegistered(PREFIX) end

@@ -14,7 +14,7 @@ local panel, choice
 function MB.Onboarded() return MB.DB().onboarded ~= nil end
 
 local PLAYS = {
-    { id = "open", name = "Open", line = "Anyone who targets you sees you have MekkaBoy and can ask to link." },
+    { id = "open", name = "Open", line = "Meet other MekkaBoy players: they show up in your game, and can ask to link." },
     { id = "friends", name = "Friends only", line = "Only your friends list, guild, group and past link partners." },
     { id = "solo", name = "Solo", line = "Nobody is told you have MekkaBoy, and Together is off." },
 }
@@ -69,12 +69,18 @@ local function finish()
     MB.SetPlayMode(choice.play)
     MB.SetLook(choice.look)
     local db = MB.DB()
-    -- (Together on the realm, still an experiment: on when playing Open, off otherwise; GBA/Ghosts.lua)
-    if db.opt.realm == nil then db.opt.realm = (choice.play == "open") and "on" or "off" end
+    -- (0.23) Together: Open and Friends only switch it on, meeting players from the guild and group (and, Open, the
+    -- MekkaBoyTogether community); Solo leaves it off. Before 0.23 this set the realm but never switched Together on.
+    if choice.play ~= "solo" then
+        db.opt.realm = "on"
+        db.opt.ghosts = true
+        if MB.Ghosts and MB.Ghosts.SetRealm then pcall(MB.Ghosts.SetRealm, "on", true) end
+    elseif db.opt.realm == nil then db.opt.realm = "off" end
     db.onboarded = MB.VERSION or true
     panel:Hide()
     Print(("How you play: %s. Look: %s. Change either in the settings, or with /mb play and /mb look."):format(
         MB.PLAY_WORDS[choice.play] or choice.play, MB.LOOK_WORDS[choice.look] or choice.look))
+    if choice.play == "open" and MB.Ghosts and MB.Ghosts.OfferCommunity then pcall(MB.Ghosts.OfferCommunity, "onboarding") end
 end
 
 local function build()
