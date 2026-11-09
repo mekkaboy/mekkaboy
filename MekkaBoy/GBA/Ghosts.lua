@@ -1374,8 +1374,20 @@ local function faction()
     local f = UnitFactionGroup and UnitFactionGroup("player")
     return (f == "Alliance" or f == "Horde") and f or nil
 end
+-- (0.23.1) the communities live on the US realms only (they are run from US accounts): EU and Oceania get none.
+-- A realm counts as US if it is one of REALM_RULES or its name starts "CAMWOW US", and the client's region is not EU/Asia.
+function G.USRealm()
+    local r = GetRealmName and GetRealmName()
+    if type(r) ~= "string" or secret(r) then return false end
+    if GetCurrentRegion then
+        local ok, region = pcall(GetCurrentRegion)
+        if ok and type(region) == "number" and region ~= 1 then return false end
+    end
+    return REALM_RULES[r] ~= nil or r:find("^CAMWOW US") ~= nil
+end
 function G.CommunityCode()
     local f = faction()
+    if not G.USRealm() then return nil, f, ruleset(), "region" end
     return f and COMMUNITIES[f] and COMMUNITIES[f][ruleset()] or nil, f, ruleset()
 end
 -- the MekkaBoyTogether community I am in, if any: { clubId, name }
@@ -1438,9 +1450,14 @@ function G.OfferCommunity(why)
     end
     local link, f, rules = G.CommunityLink(), faction(), ruleset()
     if not link then
-        if why == "character" and rec.offered == "none" then return end
-        rec.offered = "none"
-        Print(("There is no MekkaBoyTogether community for %s %s yet. Your guild, your group and friends you add (/mb together <name>) show up in the meantime."):format(f or "your faction", rules))
+        local _, _, _, why2 = G.CommunityCode()
+        if why == "character" and rec.offered == (why2 or "none") then return end
+        rec.offered = why2 or "none"
+        if why2 == "region" then
+            Print("The MekkaBoyTogether communities that find other players for you are on the US realms only. Your guild, your group and friends you add (/mb together <name>) still show up in your game.")
+        else
+            Print(("There is no MekkaBoyTogether community for %s on the %s ruleset yet. Your guild, your group and friends you add (/mb together <name>) show up in the meantime."):format(f or "your faction", rules == "RPPvP" and "RP-PvP" or rules))
+        end
         return
     end
     local code = G.CommunityCode()
@@ -1641,7 +1658,7 @@ function G.RealmLine()
     end
     local c = G.Community()
     local where = c and (("community %s (%s online of %s)"):format(c.name, tostring(realm.online or "?"), tostring(realm.members or "?")))
-        or (G.CommunityCode() and "not in the community yet (/mb together join)" or "no community for your faction and ruleset yet")
+        or (G.CommunityCode() and "not in the community yet (/mb together join)" or (G.USRealm() and "no community for your faction and ruleset yet" or "communities are on the US realms only"))
     return ("Players you have not added: %s; %s; %d heard lately, %d on your map; %d hellos sent, steps sent %d%s"):format(
         mode == "watch" and "watching (you are not shown)" or "on", where, players, here, realm.hellos, realm.sent,
         realm.refused and (" (the server refused one: " .. tostring(realm.refused) .. ")") or "")
