@@ -2367,7 +2367,11 @@ local function buildPPU(S)
                     end
                 else
                     local b = charBase + tile * 64 + row * 8
-                    if vrow[b / 4] + vrow[b / 4 + 1] == 0 then
+                    -- (0.23.3) a 256-color tile numbered past the end of picture memory (a layer with a stray map, as
+                    -- a screen in Emerald can leave) has nothing there: drawn see-through, as the console shows it,
+                    -- instead of stopping the emulator with an error
+                    local r0, r1 = vrow[b / 4], vrow[b / 4 + 1]
+                    if not r0 or not r1 or r0 + r1 == 0 then
                     elseif px >= lo and px + 7 <= hi then
                         local p = o + px
                         local c0, c1, c2, c3, c4, c5, c6, c7
@@ -2484,7 +2488,8 @@ local function buildPPU(S)
                 local from, to = 0, 7
                 if px < 0 then from = -px end
                 if px > 232 then to = 239 - px end
-                if vrow[b / 4] + vrow[b / 4 + 1] == 0 then
+                local r0, r1 = vrow[b / 4], vrow[b / 4 + 1]        -- (0.23.3: past the end of picture memory, see-through)
+                if not r0 or not r1 or r0 + r1 == 0 then
                     for k = from, to do fb[p + k] = back end
                 else
                     for k = from, to do
@@ -2682,7 +2687,7 @@ local function buildPPU(S)
                         local ci
                         if eight then
                             local t = (tile + floor(ty / 8) * perRow + floor(tx / 8) * 2) % 1024
-                            ci = vram[0x10000 + t * 32 + (ty % 8) * 8 + tx % 8]
+                            ci = vram[0x10000 + (t * 32 + (ty % 8) * 8 + tx % 8) % 0x8000]     -- (0.23.3: wraps inside sprite memory)
                         else
                             local t = (tile + floor(ty / 8) * perRow + floor(tx / 8)) % 1024
                             ci = vnib[(0x10000 + t * 32 + (ty % 8) * 4) * 2 + tx % 8]
@@ -2701,7 +2706,8 @@ local function buildPPU(S)
             if sx > -8 and sx < 240 then
                 if eight then
                     local t = (tile + trow * perRow + tcol * 2) % 1024
-                    local b = 0x10000 + t * 32 + inRow * 8
+                    local b = 0x10000 + (t * 32 + inRow * 8) % 0x8000      -- (0.23.3) the last 256-color tile's lower rows wrap
+                                                                           -- to the start of sprite memory, as on the console
                     for k = 0, 7 do
                         local x = sx + k
                         if x >= 0 and x < 240 then

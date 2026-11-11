@@ -1,6 +1,6 @@
 # MekkaBoy (beta)
 
-Current version: 0.23.2 beta.
+Current version: 0.23.3 beta.
 
 A Game Boy, Game Boy Color and Game Boy Advance emulator addon for WoW Forever.
 Install with the CurseForge app (it keeps MekkaBoy up to date): https://www.curseforge.com/wow/addons/mekkaboy

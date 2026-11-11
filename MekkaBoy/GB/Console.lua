@@ -753,7 +753,41 @@ function MB.StateInfo(n)
     return st and ((st.when and st.when ~= "") and st.when or "earlier") or nil
 end
 
+-- (0.23.3) After the emulator stops, the way back is offered as buttons, not only /mb reset. "Pick up" starts the
+-- game again from the resume point kept the moment it stopped (MB.SaveGame, in crashed below): a slip in drawing the
+-- screen leaves the game itself as it was, so nothing is lost. "From save" is /mb reset: power-on, battery save kept.
+-- A game that stops again soon after picking up is offered only its save, so a spot that keeps failing can't loop;
+-- so is one that stopped during a link (a trade or battle half-done is not a place to pick up from).
+local pickedUpAt
+local function pickUp()
+    if machine then return end
+    broken = false
+    if start(false) then
+        pickedUpAt = GetTime()
+        pcall(machine.runFrame, true)
+        present()
+        MB.SetScreenMessage(gameName() .. " picked up where it stopped\nClick the screen to play")
+        flash("Picked up")
+    end
+end
+local function offerWayBack(duringLink)
+    if not (MB.Friends and MB.Friends.Ask and MB.commands and MB.commands.reset) then return end
+    local again = pickedUpAt ~= nil and GetTime() - pickedUpAt < 60
+    pickedUpAt = nil
+    local function fromSave() MB.commands.reset.run("") end
+    local resumable = sys.states and MB.Opt("resume", true) and gameStates().resume ~= nil
+    if resumable and not again and not duringLink then
+        MB.Friends.Ask("crash", "MekkaBoy hit an error and stopped your game.\nPick up right where you were, or restart from your game's last save?",
+            "Pick up", "Not now", pickUp, nil, 0, "From save", fromSave)
+    else
+        local why = again and "It stopped again at the same spot." or (duringLink and "It stopped during a link." or "")
+        MB.Friends.Ask("crash", "MekkaBoy hit an error and stopped your game. " .. why .. "\nRestart from your game's last save?",
+            "Restart", "Not now", fromSave, nil, 0)
+    end
+end
+
 local function crashed(err)
+    local duringLink = linkBusy() and true or false
     broken = true
     MB.DB().lastError = { game = saveKey, at = date and date("%Y-%m-%d %H:%M:%S") or "?", error = tostring(err):sub(1, 4000) }
     pcall(MB.SaveGame)
@@ -765,6 +799,7 @@ local function crashed(err)
     pause()
     Print("The emulator hit an error and stopped: " .. tostring(err))
     Print("Your game's last save is safe. Type /mb bug to copy a report you can send us, so we can fix it.")
+    pcall(offerWayBack, duringLink)
 end
 
 -- one emulated frame, with everything that rides along with it
