@@ -24,6 +24,7 @@ MB.Hello = Hello
 local Print = MB.Print
 
 Hello.WHERE = "mekkaboy.com"       -- where to get MekkaBoy: said with every "newer version" line
+Hello.KEEP = "CurseForge"          -- (0.23.2) the app that keeps MekkaBoy up to date by itself
 local LANE = 5                     -- the guild and the channel go out on the extra addon name (GB/Link.lua)
 local ANNOUNCE_AFTER, ANNOUNCE_SPREAD = 20, 20   -- the guild hears from us 20 to 40 s after logging in
 local REPLY_MIN, REPLY_SPREAD = 3, 12            -- an answer to an older copy waits 3 to 15 s ...
@@ -65,7 +66,7 @@ function Hello.Seen(version, sender)
     if type(version) ~= "string" or #version > 24 or not version:match("^[%w%.%-]+$") then return end
     if Hello.Newer(version, MB.VERSION) and not toldNewer[version] then
         toldNewer[version] = true
-        Print(("%s has a newer MekkaBoy (%s; yours is %s). Get the update at %s."):format(short(sender), version, MB.VERSION, Hello.WHERE))
+        Print(("%s has a newer MekkaBoy (%s; yours is %s). Download on %s to never miss an update, or visit %s for the latest version."):format(short(sender), version, MB.VERSION, Hello.KEEP, Hello.WHERE))
     end
 end
 

@@ -2,7 +2,7 @@
 ## Title: MekkaBoy
 ## Notes: A Game Boy, Game Boy Color and Game Boy Advance emulator. /mb to open it.
 ## Author: MekkaLabs
-## Version: 0.23.1-beta
+## Version: 0.23.2-beta
 ## IconTexture: Interface\AddOns\MekkaBoy\Art\icon
 ## AddonCompartmentFunc: MekkaBoy_OnAddonCompartmentClick
 ## SavedVariables: MekkaBoyDB

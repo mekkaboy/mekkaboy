@@ -386,7 +386,7 @@ end
 
 -- Put the game's picture on the screen. Only dots whose color changed are
 -- touched, and only lines the game says it redrew are even looked at.
-local function present()
+local function paint()
     local g = grid
     local fb, dirty = machine.fb, machine.lineDirty
     local shown, tex, RC, GC, BC, set = g.shown, g.tex, g.RC, g.GC, g.BC, setColor
@@ -431,6 +431,24 @@ local function present()
         i = i + W
     end
     dotsSet = dotsSet + n
+end
+-- (0.23.2) The picture is drawn outside the game's own guard. A drawing error used to come back every frame and
+-- leave the picture standing still while the game ran on underneath: it looked like a crash and nothing was said.
+-- Now it is kept for /mb bug, said once, and the next picture is drawn from scratch.
+local paintFailed = 0
+local function present()
+    local ok, err = pcall(paint)
+    if ok then return end
+    paintFailed = paintFailed + 1
+    scanAll = true
+    local g = grid
+    if g then
+        g.RC, g.GC, g.BC = {}, {}, {}
+        for i = 1, #g.shown do g.shown[i] = -1 end
+    end
+    MB.DB().lastError = { game = saveKey, at = date and date("%Y-%m-%d %H:%M:%S") or "?",
+                          error = "screen: " .. tostring(err):sub(1, 400), count = paintFailed }
+    if paintFailed == 1 then Print("MekkaBoy's screen hit a snag and redrew itself. Your game is fine. If you see this again, /mb bug copies a report you can send us.") end
 end
 
 local function redrawAll()
@@ -746,6 +764,7 @@ local function crashed(err)
     if MB.Ghosts then MB.Ghosts.MachineChanged(nil) end
     pause()
     Print("The emulator hit an error and stopped: " .. tostring(err))
+    Print("Your game's last save is safe. Type /mb bug to copy a report you can send us, so we can fix it.")
 end
 
 -- one emulated frame, with everything that rides along with it
@@ -1163,9 +1182,10 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
     statTime = statTime + elapsed
     if statTime >= 1 then
         local pct = floor(statFrames / statTime / FPS * 100 + 0.5)
-        if sys.second then
-            sys.second(machine, storeKey or saveKey, { speed = statFrames / statTime / FPS * 100, pictures = secShown / statTime, every = pictureEvery,
+        if sys.second then        -- (0.23.2: guarded, like the frame itself; a slip here is kept for /mb bug)
+            local sok, serr = pcall(sys.second, machine, storeKey or saveKey, { speed = statFrames / statTime / FPS * 100, pictures = secShown / statTime, every = pictureEvery,
                                            game = costDrawn, blind = costBlind, paint = costPaint }, flash)
+            if not sok then MB.DB().lastError = { game = saveKey, at = date and date("%Y-%m-%d %H:%M:%S") or "?", error = "second: " .. tostring(serr):sub(1, 400) } end
         end
         if prof then
             local gc = collectgarbage("count")

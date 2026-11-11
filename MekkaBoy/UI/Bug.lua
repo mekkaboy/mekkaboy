@@ -31,6 +31,17 @@ local function text()
     end
     add("link: %s", linked)
 
+    -- (0.23.2) the last error MekkaBoy kept (the emulator stopping, a drawing slip, a window's): when, in what, and
+    -- what it said. It stays in the settings file until the next one, so a crash can still be reported afterwards.
+    local okd, db = pcall(MB.DB)
+    local e = okd and type(db) == "table" and db.lastError or nil
+    if type(e) == "table" and e.error then
+        add("last error%s%s: %s", e.at and (" " .. tostring(e.at)) or "", e.game and (" in " .. tostring(e.game)) or "",
+            tostring(e.error):sub(1, 300))
+    else
+        add("last error: none")
+    end
+
     local fired = {}
     for _, key in ipairs(MB.PAUSE_TRIGGERS or {}) do
         local n = MB.attentionSeen and MB.attentionSeen[key]
