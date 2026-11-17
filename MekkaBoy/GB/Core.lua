@@ -2259,6 +2259,8 @@ function GB.new(cfg)
   -- uses (0xD3), whose handler runs fn and then the real instruction.
   -- owner (any value, optional) names whose list this is: setting a list
   -- replaces only that owner's earlier one, so two watchers can share a game.
+  -- (0.24) fn may return a number: the CPU then goes there instead of running
+  -- the instruction (a fix to a game's own code, GB/Cable.lua's Psywave).
   local breaks = {}
   function m.setBreakpoints(list, owner)
     owner = owner or "main"
@@ -2282,7 +2284,8 @@ function GB.new(cfg)
     local at = pc - 1
     local bp = breaks[((at < 0x4000) and 0 or romBank) * 65536 + at]
     if not bp then return 4 end
-    bp.fn(a, b, c, d, e, h, l)
+    local to = bp.fn(a, b, c, d, e, h, l)
+    if type(to) == "number" then pc = to return 8 end
     return ops[bp.orig]()
   end
 

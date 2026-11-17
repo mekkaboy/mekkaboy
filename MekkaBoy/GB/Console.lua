@@ -31,6 +31,13 @@ local GBSYS = {
 }
 local sys = GBSYS             -- the system of the game that is running (or ran last)
 local REWIND_EVERY = 12       -- emulated frames between rewind snapshots (5 a second)
+-- (0.24) Restore points: every RESTORE_EVERY seconds of play, a copy of the game kept in memory only (never in the
+-- settings file, never on the player's F1-F4 valves), the last RESTORE_KEEP of them. After an error, a game that stopped
+-- again where it was picked up (or that has no resume point) is offered "Go back" to the newest one at least
+-- RESTORE_MIN_AGE old. Not taken during a link or a trade, nor in MekkaBoy's own games (a round played is not undone).
+-- One older than the game's own save is not offered: the save is the newer progress. Option "restorePoints".
+local RESTORE_EVERY, RESTORE_KEEP, RESTORE_MIN_AGE = 120, 3, 30
+local restorePts, restoreKey, restoreAt, crashedAt = {}, nil, 0, nil
 local SLOTS = 4
 
 local clock = debugprofilestop or function() return GetTime() * 1000 end
@@ -489,8 +496,17 @@ local function idleMessage()
     if broken then return "The works have jammed.\n/mb reset to try again." end
     local count = #MB.Carts.List()
     if count == 0 then return "No cartridge yet.\nClick the screen or press " .. MB.KeyLabel("start") .. " to add a game you own." end
-    if not romReady() then return "Press " .. MB.KeyLabel("start") .. " to choose a cartridge" end
-    local swap = count > 1 and ("\n" .. MB.KeyLabel("select") .. ": change cartridge") or ""
+    -- (0.24) only MekkaBoy's own games so far: say how to add one of yours (players asked how to get Pokemon)
+    local hint = ""
+    if not machine then
+        local own = false
+        for _, c in ipairs(MB.Carts.List()) do
+            if c.system ~= "native" and not (type(c.code) == "string" and c.code:sub(1, 2) == "MB") then own = true break end
+        end
+        if not own then hint = "\nAdd a game you own: /mb setup" end
+    end
+    if not romReady() then return "Press " .. MB.KeyLabel("start") .. " to choose a cartridge" .. hint end
+    local swap = (count > 1 and ("\n" .. MB.KeyLabel("select") .. ": change cartridge") or "") .. hint
     if machine then return "Paused\nClick the screen or press " .. MB.KeyLabel("start") .. " to play" .. swap end
     return gameName() .. "\nClick the screen or press " .. MB.KeyLabel("start") .. " to switch on" .. swap
 end
@@ -603,6 +619,8 @@ local function start(fresh)
     end
     machine = res
     history, lastSnap, frameNo = {}, nil, 0
+    if restoreKey ~= storeKey then restorePts, restoreKey = {}, storeKey end
+    restoreAt = GetTime()
     frameCost, costDrawn, costBlind, costPaint, blindSeen = 4, 4, 2, 1, false
     pictureEvery, sinceDrawn = 1, 0
     applyPalette()
@@ -666,6 +684,7 @@ function MB.RestoreBattery(store, save)
     if MB.Ghosts then MB.Ghosts.MachineChanged(nil) end
     MB.Saves().gba[store] = { kind = save.kind or "flash128", sectors = save.sectors, at = (date and date("%Y-%m-%d %H:%M") or "?") .. " (before an undone trade)" }
     MB.BatteryKept(store)
+    restorePts = {}                                   -- (all from before the trade that was undone)
     local states = gameStates()
     states.resume, states.resumeRev = nil, nil
     history, lastSnap = {}, nil
@@ -759,6 +778,39 @@ end
 -- A game that stops again soon after picking up is offered only its save, so a spot that keeps failing can't loop;
 -- so is one that stopped during a link (a trade or battle half-done is not a place to pick up from).
 local pickedUpAt
+-- the restore point "Go back" would use: the newest at least RESTORE_MIN_AGE older than the stop, and not older than
+-- the game's own save; with how many minutes back it is
+local function restoreChoice()
+    if not (sys and sys.states and sys.kind ~= "native" and MB.Opt("restorePoints", true)) then return nil end
+    local rev = MB.BatteryRev(storeKey or saveKey)
+    local stop = crashedAt or GetTime()
+    for i = #restorePts, 1, -1 do
+        local pt = restorePts[i]
+        if pt.rev ~= rev then return nil end           -- (this one and every older one are from before the save)
+        if stop - pt.at >= RESTORE_MIN_AGE then return i, pt, math.max(1, floor((stop - pt.at) / 60 + 0.5)) end
+    end
+    return nil
+end
+local function goBack()
+    if machine then return end
+    local i, pt, mins = restoreChoice()
+    if not i then return end
+    for j = #restorePts, i, -1 do restorePts[j] = nil end    -- (a stop after this sends the player further back)
+    broken = false
+    if start(true) then
+        local ok, good = pcall(machine.loadState, pt.state)
+        if not (ok and good) then
+            MB.SetScreenMessage(gameName() .. " couldn't go back, so it started from its save\nClick the screen to play")
+            return
+        end
+        if sys.loaded then sys.loaded(machine) end
+        pickedUpAt = GetTime()
+        pcall(machine.runFrame, true)
+        present()
+        MB.SetScreenMessage(("%s went back %d minute%s\nClick the screen to play"):format(gameName(), mins, mins == 1 and "" or "s"))
+        flash("Went back")
+    end
+end
 local function pickUp()
     if machine then return end
     broken = false
@@ -776,9 +828,14 @@ local function offerWayBack(duringLink)
     pickedUpAt = nil
     local function fromSave() MB.commands.reset.run("") end
     local resumable = sys.states and MB.Opt("resume", true) and gameStates().resume ~= nil
+    local back, _, mins = restoreChoice()
     if resumable and not again and not duringLink then
         MB.Friends.Ask("crash", "MekkaBoy hit an error and stopped your game.\nPick up right where you were, or restart from your game's last save?",
             "Pick up", "Not now", pickUp, nil, 0, "From save", fromSave)
+    elseif back and not duringLink then
+        local why = again and " It stopped again at the same spot." or ""
+        MB.Friends.Ask("crash", ("MekkaBoy hit an error and stopped your game.%s\nGo back %d minute%s, or restart from your game's last save?"):format(why, mins, mins == 1 and "" or "s"),
+            "Go back", "Not now", goBack, nil, 0, "From save", fromSave)
     else
         local why = again and "It stopped again at the same spot." or (duringLink and "It stopped during a link." or "")
         MB.Friends.Ask("crash", "MekkaBoy hit an error and stopped your game. " .. why .. "\nRestart from your game's last save?",
@@ -788,6 +845,7 @@ end
 
 local function crashed(err)
     local duringLink = linkBusy() and true or false
+    crashedAt = GetTime()
     broken = true
     MB.DB().lastError = { game = saveKey, at = date and date("%Y-%m-%d %H:%M:%S") or "?", error = tostring(err):sub(1, 4000) }
     pcall(MB.SaveGame)
@@ -824,6 +882,16 @@ local function step(render)
         history[#history + 1] = lastSnap
         if #history > MB.Opt("rewindSeconds", 40) * 5 then table.remove(history, 1) end
     end
+    if sys.states and sys.kind ~= "native" and GetTime() - restoreAt >= RESTORE_EVERY then
+        restoreAt = GetTime()
+        if MB.Opt("restorePoints", true) and not linkBusy() then
+            local ok, st = pcall(machine.saveState)
+            if ok and type(st) == "table" then
+                restorePts[#restorePts + 1] = { state = st, at = restoreAt, rev = MB.BatteryRev(storeKey or saveKey) }
+                if #restorePts > RESTORE_KEEP then table.remove(restorePts, 1) end
+            end
+        end
+    end
     return true
 end
 
@@ -843,6 +911,7 @@ local function eject()
     end
     saveKey, storeKey, broken = nil, nil, false
     history, lastSnap = {}, nil
+    restorePts, restoreKey = {}, nil
     pokes = {}
 end
 
@@ -881,12 +950,16 @@ local function closePicker()
     refreshStatus()
 end
 
+-- (0.24) the last entry adds a game you own (the setup window)
+local ADD = { id = "+add", name = "+ Add a game you own" }
 local function openPicker()
-    local list = MB.Carts.List()
+    local list = {}
+    for i, c in ipairs(MB.Carts.List()) do list[i] = c end
     if #list == 0 then
         MB.SetScreenMessage(idleMessage())
         return
     end
+    list[#list + 1] = ADD
     if playing() then pause() end
     picking = { list = list, index = 1 }
     local now = inserted()
@@ -899,6 +972,12 @@ end
 -- put a cartridge in and switch on
 local function insert(id)
     picking = nil
+    if id == ADD.id then
+        MB.SetScreenMessage(idleMessage())
+        refreshStatus()
+        if MB.Import and MB.Import.Open then MB.Import.Open() end
+        return false
+    end
     if not MB.Carts.Find(id) then return false end
     if id ~= saveKey then
         eject()
@@ -1475,6 +1554,147 @@ MB.AddCommand("reset", "reset - restart the game from power-on (battery save is 
         MB.SetScreenMessage(gameName() .. " restarted\nClick the screen to play")
         flash("Restarted")
     end
+end)
+
+-- (0.24) Start over: the game in the console erases its own save and starts as if new (a player wanted a new starter;
+-- every save is in one settings file, so there is no file to delete by hand). It asks first. The erased save and its
+-- resume point are kept until logout or /reload, so "/mb newgame undo" can put them back. Memory valves are not touched.
+-- Not during a link or trade, nor mid-round in one of our own games.
+local erased = {}        -- [where the save lives] = { save =, resume =, name =, cart = }
+local erasedOrder = {}   -- (oldest first: "undo" with no game in the console puts back the newest still erased)
+local function lastErased() for i = #erasedOrder, 1, -1 do if erased[erasedOrder[i]] then return erasedOrder[i] end end end
+-- a cartridge on the shelf: its system, and the table its battery save lives in (native cartridges keep their own)
+local function cartSys(c) if c.system == "gba" then return MB.AdvanceSystem elseif c.system == "native" then return nil end return GBSYS end
+local function cartStore(c) return c.system == "gba" and MB.Saves().gba or MB.Saves().gb end
+-- (for the settings page) the cartridges that have a save to start over, by name
+function MB.SavedGames()
+    local t = {}
+    for _, c in ipairs(MB.Carts.List()) do
+        local key = cartSys(c) and MB.SaveKey(c.id)
+        if key and (cartStore(c)[key] or (saveKey == c.id and machine)) then t[#t + 1] = c end
+    end
+    table.sort(t, function(x, y) return x.name < y.name end)
+    return t
+end
+local function saveStore() return (sys and sys.kind == "gb") and MB.Saves().gb or MB.Saves().gba end
+local function swapSave(key, save, resume, word)
+    if machine then
+        pause()
+        machine = nil
+        MB.Sound.Stop()
+        MB.Sound.Attach(nil)
+        if MB.Link and MB.Link.MachineChanged then MB.Link.MachineChanged(nil) end
+        if MB.Ghosts then MB.Ghosts.MachineChanged(nil) end
+    end
+    saveStore()[key] = save
+    MB.BatteryKept(key)                                   -- (restore points and resume points from before are stale now)
+    local states = gameStates()
+    states.resume, states.resumeRev = resume, resume and MB.BatteryRev(key) or nil
+    restorePts, history, lastSnap = {}, {}, nil
+    broken = false
+    if start(resume == nil) then
+        pcall(machine.runFrame, true)
+        present()
+        MB.SetScreenMessage(gameName() .. " " .. word .. "\nClick the screen to play")
+        refreshStatus()
+    end
+end
+local function newGameBlocked()
+    if not (machine and saveKey and sys and sys.states) then
+        Print("Put the game you want to start over in the console first, or name it: /mb newgame emerald.")
+        return true
+    end
+    if linkBusy() then Print("Not during a link or a trade. Finish it first.") return true end
+    if gameBusy() then Print("Not in the middle of a round. Finish the hand first.") return true end
+    return false
+end
+local function startOver()
+    if newGameBlocked() then return end
+    local key, name = storeKey or saveKey, gameName()
+    if MB.SaveGame then pcall(MB.SaveGame) end                -- (what's on screen now is what the undo brings back)
+    local ask = ("Start %s over from the beginning?\nIts save is erased. Changed your mind? /mb newgame undo puts it back until you log out."):format(name)
+    MB.Friends.Ask("newgame", ask, "Start over", "Cancel", function()
+        if newGameBlocked() or (storeKey or saveKey) ~= key then return end
+        local states = gameStates()
+        erased[key] = { save = saveStore()[key], resume = states.resume, name = name }
+        erasedOrder[#erasedOrder + 1] = key
+        swapSave(key, nil, nil, "is starting over")
+        Print(name .. " is starting over. Changed your mind? /mb newgame undo puts your old save back, until you log out or /reload. Your memory valves are still there.")
+    end, nil, 0)
+end
+-- a game that isn't in the console: its save is erased where it lies, and it starts from the beginning when next played
+local function startOverShelf(c)
+    local key, s = MB.SaveKey(c.id), cartSys(c)
+    if not (key and s) then return end
+    MB.Friends.Ask("newgame", ("Start %s over from the beginning?\nIts save is erased. Changed your mind? /mb newgame undo puts it back until you log out."):format(c.name), "Start over", "Cancel", function()
+        if saveKey == c.id and machine then startOver() return end
+        local states = s.statesFor(key)
+        erased[key] = { save = cartStore(c)[key], resume = states.resume, name = c.name, cart = c }
+        erasedOrder[#erasedOrder + 1] = key
+        cartStore(c)[key] = nil
+        MB.BatteryKept(key)
+        states.resume, states.resumeRev = nil, nil
+        Print(c.name .. " starts from the beginning the next time you play it. Changed your mind? /mb newgame undo puts its save back, until you log out or /reload. Your memory valves are still there.")
+    end, nil, 0)
+end
+local function undoShelf(key)
+    local was = erased[key]
+    local c = was and was.cart
+    if not c then Print("There's no erased save to put back. An undo lasts until you log out or /reload.") return end
+    MB.Friends.Ask("newgame", ("Put your old %s save back?\nAnything played since you started over is lost."):format(was.name), "Put it back", "Cancel", function()
+        if erased[key] ~= was then return end
+        if saveKey == c.id and machine then
+            erased[key] = nil
+            swapSave(key, was.save, was.resume, "is back where you were")
+        else
+            erased[key] = nil
+            cartStore(c)[key] = was.save
+            MB.BatteryKept(key)
+            local states = cartSys(c).statesFor(key)
+            states.resume, states.resumeRev = was.resume, was.resume and MB.BatteryRev(key) or nil
+        end
+        Print("Your old " .. was.name .. " save is back.")
+    end, nil, 0)
+end
+local function undoStartOver()
+    -- the game in the console, if its save was erased; otherwise the last game started over
+    local inKey = machine and (storeKey or saveKey)
+    if not (inKey and erased[inKey]) then
+        local last = lastErased()
+        if last then
+            if linkBusy() then Print("Not during a link or a trade. Finish it first.") return end
+            undoShelf(last)
+        else
+            Print("There's no erased save to put back. An undo lasts until you log out or /reload.")
+        end
+        return
+    end
+    if newGameBlocked() then return end
+    local key, name = storeKey or saveKey, gameName()
+    local was = erased[key]
+    if not was then Print("There's no erased save of " .. name .. " to put back. An undo lasts until you log out or /reload.") return end
+    MB.Friends.Ask("newgame", ("Put your old %s save back?\nAnything played since you started over is lost."):format(name), "Put it back", "Cancel", function()
+        if newGameBlocked() or (storeKey or saveKey) ~= key or erased[key] ~= was then return end
+        erased[key] = nil
+        swapSave(key, was.save, was.resume, "is back where you were")
+        Print("Your old " .. name .. " save is back.")
+    end, nil, 0)
+end
+-- (for the settings page) start one game over: the one in the console, or one on the shelf
+function MB.StartOver(id)
+    if not id or (machine and id == saveKey) then startOver() return end
+    if InCombatLockdown and InCombatLockdown() then Print("Not in combat.") return end
+    local c = MB.Carts.Find(id)
+    if c then startOverShelf(c) end
+end
+MB.AddCommand("newgame", "newgame [game] - start a game over from the beginning: the one in the console, or the one named (asks first; /mb newgame undo puts the save back)", function(rest)
+    rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if rest:lower() == "undo" then undoStartOver() return end
+    if rest == "" then startOver() return end
+    for _, c in ipairs(MB.SavedGames()) do
+        if c.name:lower():find(rest:lower(), 1, true) or c.id:lower() == rest:lower() then MB.StartOver(c.id) return end
+    end
+    Print("No saved game matches \"" .. rest .. "\". The settings page lists the games you can start over.")
 end)
 
 MB.AddCommand("resume", "resume on|off - pick up exactly where you left off after logging out", function(rest)

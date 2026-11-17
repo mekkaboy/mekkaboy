@@ -173,11 +173,12 @@ local HELLO_EVERY = 60    -- seconds between "here I am"s to the guild, the grou
 local HELLO_SOON = 5      -- the least time between two, when the map changes often
 local COMMUNITY_EACH = 6  -- community members told each minute, in turn (those met already hear at every map change)
 -- the MekkaBoyTogether communities: faction -> ruleset -> invite code. A ruleset is guessed from the realm's name.
--- (owners: Luke Redbird for Alliance PvP; Mekkaboy Alliance and Mekkaboy Horde for PvE; Mekkaboy Alliancerp and
--- Mekkaboy Horderp for RP; Mekkaboy Alliancerpvp and Mekkaboy Horderpvp for RP-PvP)
+-- (owners: Mekka Boy for Alliance PvP; Mekkaboy Alliance and Mekkaboy Horde for PvE; Mekkaboy Alliancerp and
+-- Mekkaboy Horderp for RP; Mekkaboy Alliancerpvp and Mekkaboy Horderpvp for RP-PvP; Mekkaboy Hordepvp for Horde PvP,
+-- added in 0.23.4)
 local COMMUNITIES = {
     Alliance = { PvP = "K09ZNqqFkA9", PvE = "eyXGPqgIb0b", RP = "yzZyVRLumLb", RPPvP = "lKAGzqbswGv" },
-    Horde = { PvE = "N9K2zMACWYj", RP = "zejyXnrUkM3", RPPvP = "GKMVZArh7qx" },
+    Horde = { PvP = "K09eYbpiZen", PvE = "N9K2zMACWYj", RP = "zejyXnrUkM3", RPPvP = "GKMVZArh7qx" },
 }
 local COMMUNITY_NAME = "MekkaBoyTogether"
 
@@ -1491,6 +1492,56 @@ do
             if C_Timer and C_Timer.After then C_Timer.After(1, function() pcall(G.CharacterCheck) end) end
         end)
     end
+end
+
+-- (0.23.4) How many have joined: for each MekkaBoyTogether community this character is in, its member count and how
+-- many are online, noted in MekkaBoyDB.communityCounts at most once an hour per community, a while after logging in
+-- or reloading. Counts only, never names, and kept in the settings file on this computer: nothing is sent anywhere.
+local COUNT_EVERY, COUNT_KEEP = 3600, 400
+function G.CountCommunities()
+    if not (C_Club and C_Club.GetSubscribedClubs and C_Club.GetClubMembers) then return 0 end
+    local ok, clubs = pcall(C_Club.GetSubscribedClubs)
+    if not ok or type(clubs) ~= "table" then return 0 end
+    local db = MB.DB()
+    db.communityCounts = db.communityCounts or {}
+    local now = time and time() or 0
+    local noted = 0
+    for _, c in ipairs(clubs) do
+        local name = c.name
+        if type(name) == "string" and not secret(name) and name:sub(1, #COMMUNITY_NAME) == COMMUNITY_NAME
+           and (c.clubType == nil or c.clubType == 1) then
+            local list = db.communityCounts[name] or {}
+            db.communityCounts[name] = list
+            local last = list[#list]
+            if not (last and type(last.t) == "number" and now - last.t < COUNT_EVERY) then
+                local ok2, ids = pcall(C_Club.GetClubMembers, c.clubId)
+                if ok2 and type(ids) == "table" and #ids > 0 then
+                    local online = 0
+                    for _, id in ipairs(ids) do
+                        local ok3, info = pcall(C_Club.GetMemberInfo, c.clubId, id)
+                        if ok3 and type(info) == "table" and (info.presence == 1 or info.presence == 4 or info.presence == 5) then
+                            online = online + 1
+                        end
+                    end
+                    local members = #ids
+                    if type(c.memberCount) == "number" and c.memberCount > members then members = c.memberCount end
+                    list[#list + 1] = { t = now, at = date and date("%Y-%m-%d %H:%M") or nil, members = members, online = online }
+                    while #list > COUNT_KEEP do table.remove(list, 1) end
+                    noted = noted + 1
+                end
+            end
+        end
+    end
+    return noted
+end
+do
+    local ev = CreateFrame("Frame")
+    pcall(ev.RegisterEvent, ev, "PLAYER_LOGIN")
+    ev:SetScript("OnEvent", function()
+        if C_Timer and C_Timer.After then
+            C_Timer.After(45, function() pcall(G.CountCommunities) end)
+        end
+    end)
 end
 
 -- "here I am": GH;1;<my map, as placeKey writes it, or empty>;<q (answer me) or a (an answer)><s (shown) or w (watching)>

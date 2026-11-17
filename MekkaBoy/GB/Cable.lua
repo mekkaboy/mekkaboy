@@ -37,6 +37,11 @@ local GEN1 = {
     battle = { 0x0F, 0x563B },      -- LinkBattleExchangeData.syncLoop1
     battleEnd = { 0x0F, 0x5654 },   --   .syncLoop3
     close = { 0x01, 0x72D7 },       -- CloseLinkConnection
+    -- (0.24) link battles kept in step: see "a battle in step" below
+    psywave = { 0x0F, 0x61F2 },     -- the Psywave damage loop when the other side attacks (call BattleRandom; cp b; jr nc)
+    statusCode = { 0x0F, 0x5854 },  -- CheckPlayerStatusConditions: ld hl, wBattleMonStatus
+    mine = 0xD015,                  -- wBattleMonHP (2 bytes), then +3 the status
+    theirs = 0xCFE6,                -- wEnemyMonHP, the same
 }
 
 -- Pokemon Yellow: the same conversation and the same memory, with the code in other places.
@@ -48,6 +53,7 @@ local YELLOW = {
     menu = { 0x3D, 0x5855 }, menuEnd = { 0x3D, 0x58B4 },
     battle = { 0x0F, 0x57AD }, battleEnd = { 0x0F, 0x57C6 },
     close = { 0x01, 0x71AC },
+    psywave = { 0x0F, 0x6364 }, statusCode = { 0x0F, 0x59C6 }, mine = 0xD014, theirs = 0xCFE5,
 }
 
 -- Pokemon Gold and Silver (the two share every address below). The second
@@ -150,6 +156,7 @@ local function clear(g)
     g.k, g.j = 0, 0                 -- how many syncs and blocks this session has seen
     g.phase = "idle"
     g.rN, g.rB, g.rM = {}, {}, nil  -- what the other side has told us: nybbles, blocks, menu choice
+    g.myH, g.rH = {}, {}            -- how each game saw the battle at each turn (a battle in step)
     g.dq, g.dp = nil, 0             -- a block being fed to the game
     g.zeros = 0
     g.sentM = false
@@ -310,6 +317,51 @@ function Ghost:onWait(sb)
     return nil
 end
 
+-- --------------------------------------------------- a battle in step ---
+-- (0.24) The original Red, Blue and Yellow run a link battle twice, once on each Game Boy, and a few moves can work
+-- out differently on the two (a known fault of the cartridges). Psywave is fixed here: the code for the other side's
+-- Psywave lets a roll of 0 through where the code for your own rolls again, so the other side's now rolls again too,
+-- the same on both (and harmless if only one MekkaBoy has the fix). For everything else, at each turn's exchange both
+-- games say how they see the battle (each Pokemon's HP and status) and compare; if they ever disagree, the battle can
+-- no longer be trusted, so the link is closed on both sides with a note. Only between two first-generation games.
+local function code(m, at, bytes)
+    for i, v in ipairs(bytes) do
+        if v >= 0 and m.peekRom(at[1], at[2] + i - 1) ~= v then return false end
+    end
+    return true
+end
+local function inStep(g)
+    local p, m = g.p, g.m
+    if g.mixed or not (p.psywave and p.mine) then return false end
+    if g.okStep == nil then
+        g.okStep = code(m, p.psywave, { 0xCD, -1, -1, 0xB8, 0x30, 0xFA })
+            and code(m, p.statusCode, { 0x21, (p.mine + 3) % 256, math.floor((p.mine + 3) / 256), 0x7E, 0xE6, 0x07, 0x28 })
+    end
+    return g.okStep
+end
+local function view(g)
+    local m, p = g.m, g.p
+    local function mon(at) return char(m.peek(at), m.peek(at + 1), m.peek(at + 3)) end
+    return mon(p.mine), mon(p.theirs)
+end
+local function compareStep(g, k)
+    local mine, theirs = g.myH[k], g.rH[k]
+    if not (mine and theirs) then return end
+    g.myH[k], g.rH[k] = nil, nil
+    -- what I see as mine they see as theirs, and the other way round
+    if sub(mine, 1, 3) ~= sub(theirs, 4, 6) or sub(mine, 4, 6) ~= sub(theirs, 1, 3) then
+        g.note("out of step")
+    end
+end
+local function sendStep(g)
+    if not inStep(g) then return end
+    local a, b = view(g)
+    local k = g.k % 256
+    g.myH[k] = a .. b
+    g:tx("H", char(k) .. a .. b)
+    compareStep(g, k)
+end
+
 -- ------------------------------------------- watching the game's routines ---
 local function startSync(g)
     g.k = g.k + 1
@@ -355,11 +407,17 @@ local function watch(g)
     local list = {
         at(p.sync, function() startSync(g) end),
         at(p.syncEnd, function() endSync(g) end),
-        at(p.battle, function() if g.phase ~= "sync" then startSync(g) end end),
+        at(p.battle, function() if g.phase ~= "sync" then startSync(g) sendStep(g) end end),
         at(p.battleEnd, function() endSync(g) end),
         at(p.bytes, block(false)),
         at(p.close, function() close(g) end),
     }
+    if p.psywave and inStep(g) then
+        local loop = p.psywave
+        list[#list + 1] = { bank = loop[1], addr = loop[2] + 3, fn = function(a)
+            if g.established and a == 0 then return loop[2] end       -- (a 0: roll again, as for your own Psywave)
+        end }
+    end
     if p.menu then
         -- first generation: one menu, and the leader's choice of room counts for both
         list[#list + 1] = at(p.menu, function()
@@ -408,6 +466,9 @@ function Ghost:receive(msg)
         self.rN[byte(msg, 3)] = byte(msg, 4) % 16
     elseif kind == "M" then
         self.rM = byte(msg, 3)
+    elseif kind == "H" then
+        local k = byte(msg, 3)
+        if k and #msg == 9 then self.rH[k] = sub(msg, 4) compareStep(self, k) end
     elseif kind == "B" then
         self.rB[byte(msg, 3)] = sub(msg, 4)
     elseif kind == "X" then

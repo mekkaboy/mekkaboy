@@ -849,6 +849,15 @@ local function plug()
         hurry = MB.Alpha() and function() if session == s then s.wire:hurry() end end or nil,
         note = function(what)
             record(s, what)
+            if what == "out of step" then
+                -- (0.24) the two games no longer agree on the battle: nothing more it does can be trusted
+                local function bye()
+                    if session ~= s then return end
+                    unlink(("Your game and %s's stopped agreeing on the battle (a fault of the original Red, Blue and Yellow cartridges), so the link was closed. Type /mb reset to restart your game from its save."):format(short(s.partner)), true)
+                end
+                if C_Timer and C_Timer.After then C_Timer.After(0, bye) else bye() end
+                return
+            end
             local line = NOTES[what]
             if line then line = line(s) else line = what end
             if line then Print(line) end
