@@ -292,7 +292,7 @@ local function build()
     local x = 16
     for _, b in ipairs({
         { "Add a game", 110, function() MB.CloseOptions() if MB.Import then MB.Import.Open() end end },
-        { "Show the controls", 140, function() if MB.commands.keys then MB.commands.keys.run("") end end },
+        { "Controls", 100, function() if MB.OpenControls then MB.OpenControls() end end },
         { "Friends", 90, function() MB.CloseOptions() if MB.Friends and MB.Friends.Open then MB.Friends.Open() end end },
         { "Back to the middle", 140, function() if MB.commands.center then MB.commands.center.run("") end end },
     }) do

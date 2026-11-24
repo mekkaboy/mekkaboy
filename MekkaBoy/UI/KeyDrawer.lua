@@ -51,15 +51,19 @@ end
 local PRETTY = { BACKSPACE = "Backspace", ENTER = "Enter", TAB = "Tab", ESCAPE = "Esc", SPACE = "Space", UP = "Up", DOWN = "Down",
                  LEFT = "Left", RIGHT = "Right", ["`"] = "` key" }
 local function pretty(k) return PRETTY[k] or k end
-local function keysOf(button)                          -- the player's keys for a button, as a list
-    local label = MB.KeyLabel and MB.KeyLabel(button)
+-- (0.25) playing with a controller: the drawer shows its buttons instead of the keys
+local function padMode() return MB.Opt and MB.Opt("controller", false) and MB.PadLabel end
+local function keysOf(button)                          -- the player's keys (or controller buttons) for a button, as a list
+    local pad = padMode()
+    local label = pad and MB.PadLabel(button) or (MB.KeyLabel and MB.KeyLabel(button))
     local t = {}
-    if label then for k in label:gmatch("[^ ]+") do if k ~= "or" then t[#t + 1] = pretty(k) end end end
+    if label then for k in label:gmatch("[^ ]+") do if k ~= "or" then t[#t + 1] = pad and MB.PrettyKey and MB.PrettyKey(k) or pretty(k) end end end
     return t
 end
 local function one(button) local t = keysOf(button) return #t > 0 and table.concat(t, " or ") or "-" end
 local function pair(b1, b2) return one(b1) .. "  /  " .. one(b2) end
 local function dpad()
+    if padMode() and MB.PadLabel("up") == "PADDUP" then return "D-pad or left stick" end
     local u, d, l, r = keysOf("up"), keysOf("down"), keysOf("left"), keysOf("right")
     local arrows = u[1] == "Up" and d[1] == "Down" and l[1] == "Left" and r[1] == "Right"
     local wasd = u[2] == "W" and d[2] == "S" and l[2] == "A" and r[2] == "D"
@@ -119,9 +123,9 @@ function MB.RefreshKeyDrawer()
     set(3, "Start  /  Select", pair("start", "select"))
     set(4, "L  /  R", pair("l", "r") .. (gba and "" or "   (Advance)"), not gba)
     set(5, "Turbo A  /  B", pair("turboa", "turbob"))
-    set(6, "Fast-forward", one("ff") .. " (hold)")
+    set(6, "Fast-forward", one("ff") .. ((MB.Opt and MB.Opt("ffToggle", false)) and " (toggle)" or " (hold)"))
     set(7, "Rewind", one("rewind") .. (gb and " (hold)" or "   (Game Boy)"), not gb)
-    set(8, "Memory valves", "F1-F4,  Shift saves")
+    set(8, "Memory valves", "F1-F4,  Shift saves")   -- (keyboard only)
     set(9, "Volume", pair("volup", "voldown"))
     set(10, "Pause", "Esc")
 end
@@ -168,7 +172,7 @@ win:HookScript("OnShow", function()
         local opt = MB.DB().opt
         if not opt.keysHinted then
             opt.keysHinted = true
-            Print("The ? button at the top of the console shows the controls (/mb keys lists them).")
+            Print("The ? button at the top of the console shows the controls; /mb controls changes them, and turns on a controller.")
         end
     end
     MB.SetKeyDrawer(want, false)

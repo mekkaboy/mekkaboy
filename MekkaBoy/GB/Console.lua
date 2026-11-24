@@ -62,6 +62,17 @@ local DEFAULT_KEYS = {
     ff = { "TAB" }, rewind = { "`" },
     volup = { "=" }, voldown = { "-" },
 }
+-- (0.25) a controller: the buttons by the names the game client gives them (an Xbox layout: PAD1 is A, the bottom
+-- face button; PAD2 is B, the right one). A and B are where their letters are; X and Y are turbo A and B; Menu and View
+-- are Start and Select; the shoulders are L and R; the triggers fast-forward and rewind. The left stick is a D-pad too.
+-- /mb bind a PAD2 (or the Controls card) changes any of them.
+local DEFAULT_PAD = {
+    up = { "PADDUP" }, down = { "PADDDOWN" }, left = { "PADDLEFT" }, right = { "PADDRIGHT" },
+    a = { "PAD1" }, b = { "PAD2" }, turboa = { "PAD3" }, turbob = { "PAD4" },
+    start = { "PADFORWARD" }, select = { "PADBACK" }, l = { "PADLSHOULDER" }, r = { "PADRSHOULDER" },
+    ff = { "PADRTRIGGER" }, rewind = { "PADLTRIGGER" },
+}
+local function isPadKey(k) return type(k) == "string" and k:sub(1, 3) == "PAD" end
 local BUTTON_ORDER = { "up", "down", "left", "right", "a", "b", "start", "select", "l", "r",
                        "turboa", "turbob", "ff", "rewind", "volup", "voldown" }
 local BUTTON_NAMES = {
@@ -158,6 +169,7 @@ local rewindAcc = 0
 local pokes = {}                     -- GameShark writes applied every frame
 local note, noteUntil = nil, 0       -- a short message shown on the status plate
 local speedText = ""
+local ffLatched = false              -- (0.25) fast-forward switched on, when it is a switch rather than held
 local waiting = false                -- linked, and held still until the other player's game answers
 local secShown = 0
 
@@ -214,10 +226,23 @@ local function rebuildKeymap()
     for button, keys in pairs(saved) do -- your own choices win over defaults
         for _, k in ipairs(keys) do keymap[k] = button end
     end
+    -- (0.25) the controller's buttons, kept apart from the keys (choosing a key for A leaves its controller button be)
+    local pads = MB.Opt("padKeys", nil) or {}
+    for button, keys in pairs(DEFAULT_PAD) do
+        if not pads[button] then for _, k in ipairs(keys) do if not keymap[k] then keymap[k] = button end end end
+    end
+    for button, keys in pairs(pads) do for _, k in ipairs(keys) do keymap[k] = button end end
 end
+MB.RebuildKeymap = function() rebuildKeymap() end
 rebuildKeymap()
 MB.onLogin[#MB.onLogin + 1] = rebuildKeymap   -- saved bindings arrive after this file has run
 
+function MB.PadLabel(button)
+    local saved = MB.Opt("padKeys", nil)
+    local keys = (saved and saved[button]) or DEFAULT_PAD[button]
+    return keys and #keys > 0 and table.concat(keys, " or ") or nil
+end
+MB.DEFAULT_PAD, MB.DEFAULT_KEYS, MB.BUTTON_ORDER, MB.BUTTON_NAMES = DEFAULT_PAD, DEFAULT_KEYS, BUTTON_ORDER, BUTTON_NAMES
 function MB.KeyLabel(button)
     local saved = MB.Opt("keys", nil)
     local keys = (saved and saved[button]) or DEFAULT_KEYS[button]
@@ -650,6 +675,7 @@ local function start(fresh)
         buildScreen()
     end
     MB.Sound.Attach(machine, saveKey)
+    if MB.OnGameAttached then pcall(MB.OnGameAttached, saveKey, sys.kind) end       -- (0.25: no pack yet? say how)
     if MB.Link and MB.Link.MachineChanged then MB.Link.MachineChanged(sys.kind ~= "native" and machine or nil) end
     if MB.Ghosts then MB.Ghosts.MachineChanged(machine, sys.kind) end
     if word then flash(word) end
@@ -1063,6 +1089,12 @@ local function applyHeld(button, down)
         if machine and sys.pad[button] then machine.setKey(button, down) end
         -- (talking to a friend's ghost: every way of pressing A, the keyboard and the pad and the on-screen button)
         if down and button == "a" and MB.Ghosts and MB.Ghosts.Pressed then pcall(MB.Ghosts.Pressed, "a") end
+    elseif button == "ff" and MB.Opt("ffToggle", false) then
+        -- (0.25) fast-forward as a switch: each press turns it on or off
+        if down then
+            ffLatched = not ffLatched
+            flash(ffLatched and "Fast-forward on" or "Fast-forward off")
+        end
     elseif down then
         if button == "rewind" and not sys.rewind then flash(NOT_ADVANCE) return end
         held[button] = true
@@ -1141,27 +1173,31 @@ function MB.OnMemory(n, save)
     if save then saveSlot(n) else loadSlot(n) end
 end
 
-keyCapture:SetScript("OnKeyDown", function(self, key)
+-- a key, or a controller button (fromPad), went down while the console is open
+local function inputDown(self, key, fromPad)
     if InCombatLockdown() then return end -- (the console closes for combat; belt and braces)
-    if key == "PRINTSCREEN" then
-        self:SetPropagateKeyboardInput(true)   -- the one key let through: screenshots
-        return
+    if not fromPad then
+        if key == "PRINTSCREEN" then
+            self:SetPropagateKeyboardInput(true)   -- the one key let through: screenshots
+            return
+        end
+        self:SetPropagateKeyboardInput(false)      -- everything else stays here
+        if key == "ESCAPE" then
+            if picking then closePicker() elseif running then pause() else MB.Hide() end
+            return
+        end
+        if isToggleKey(key) then
+            if picking then closePicker() end
+            MB.Hide()
+            return
+        end
     end
-    self:SetPropagateKeyboardInput(false)      -- everything else stays here
-    if key == "ESCAPE" then
-        if picking then closePicker() elseif running then pause() else MB.Hide() end
-        return
-    end
-    if isToggleKey(key) then
-        if picking then closePicker() end
-        MB.Hide()
-        return
-    end
+    if MB.CapturingInput and MB.CapturingInput(key, fromPad) then return end      -- (the Controls card is waiting for one)
     if picking then
         if keymap[key] then pickerButton(keymap[key]) end
         return
     end
-    local slot = STATE_KEYS[key]
+    local slot = not fromPad and STATE_KEYS[key]
     if slot then
         if IsShiftKeyDown and IsShiftKeyDown() then saveSlot(slot) else loadSlot(slot) end
         return
@@ -1180,18 +1216,67 @@ keyCapture:SetScript("OnKeyDown", function(self, key)
     setHeld(button, true, "key:" .. key)
     MB.SetPressed(shown(button), true)
     keysDown[key] = button
-    if keyIsDown and keyTrusted[key] == nil then
+    if fromPad then keyTrusted[key] = false               -- (let go by its own event, not asked about)
+    elseif keyIsDown and keyTrusted[key] == nil then
         local ok, down = pcall(keyIsDown, key)
         keyTrusted[key] = (ok and down == true) or false
     end
-end)
-
-keyCapture:SetScript("OnKeyUp", function(_, key)
+end
+local function inputUp(key)
     local button = keysDown[key] or keymap[key]         -- (the button it pressed, even if the keys were changed since)
     keysDown[key] = nil
     if not button or not running then return end
     if setHeld(button, false, "key:" .. key) then MB.SetPressed(shown(button), false) end
+end
+keyCapture:SetScript("OnKeyDown", function(self, key) inputDown(self, key, false) end)
+keyCapture:SetScript("OnKeyUp", function(_, key) inputUp(key) end)
+
+-- (0.25) A controller. The game client hands controller buttons to a frame that asks for them, by name (PAD1, PADDUP,
+-- PADFORWARD...), much as it hands it keys; the left stick comes as a direction. Only with "Play with a controller" on
+-- (MB.Opt("controller")), which also switches on the client's own controller support (the GamePadEnable setting), and
+-- only while the console is open: closed, the controller is the client's again.
+local stickDirs = {}                 -- direction -> true, held by the left stick
+local STICK_AT = 0.5                 -- how far the stick must lean to press a direction
+local function stickTo(x, y)
+    local want = { up = y > STICK_AT, down = y < -STICK_AT, right = x > STICK_AT, left = x < -STICK_AT }
+    for dir, on in pairs(want) do
+        if on and not stickDirs[dir] then
+            stickDirs[dir] = true
+            if running then setHeld(dir, true, "stick") MB.SetPressed(dir, true)
+            elseif picking then pickerButton(dir) end
+        elseif not on and stickDirs[dir] then
+            stickDirs[dir] = nil
+            if setHeld(dir, false, "stick") then MB.SetPressed(dir, false) end
+        end
+    end
+end
+function MB.ControllerSupported() return keyCapture.EnableGamePadButton ~= nil end
+function MB.ApplyController()
+    local on = MB.Opt("controller", false) and true or false
+    if keyCapture.EnableGamePadButton then pcall(keyCapture.EnableGamePadButton, keyCapture, on) end
+    if keyCapture.EnableGamePadStick then pcall(keyCapture.EnableGamePadStick, keyCapture, on) end
+    if not on then stickTo(0, 0) end
+    return on
+end
+-- switch it on or off; returns whether the client's controller support had to be switched on as well
+function MB.SetController(on)
+    MB.DB().opt.controller = on and true or nil
+    local turnedOn = false
+    if on and GetCVar and SetCVar then
+        local ok, v = pcall(GetCVar, "GamePadEnable")
+        if ok and v ~= "1" then pcall(SetCVar, "GamePadEnable", "1") turnedOn = true end
+    end
+    MB.ApplyController()
+    return turnedOn
+end
+-- (pcall: a client without controller support has no such scripts, and refuses to set one)
+pcall(keyCapture.SetScript, keyCapture, "OnGamePadButtonDown", function(self, button) inputDown(self, button, true) end)
+pcall(keyCapture.SetScript, keyCapture, "OnGamePadButtonUp", function(_, button) inputUp(button) end)
+pcall(keyCapture.SetScript, keyCapture, "OnGamePadStick", function(_, stick, x, y)
+    if stick == "Left" or stick == "Move" or stick == "Movement" then stickTo(tonumber(x) or 0, tonumber(y) or 0) end
 end)
+MB.onLogin[#MB.onLogin + 1] = function() pcall(MB.ApplyController) end
+MB.window:HookScript("OnHide", function() stickTo(0, 0) end)
 
 -- ---------------------------------------------------------- main loop ---
 keyCapture:SetScript("OnUpdate", function(_, elapsed)
@@ -1229,7 +1314,7 @@ keyCapture:SetScript("OnUpdate", function(_, elapsed)
         return
     end
 
-    local ff = held.ff or MB.Opt("ffLock", false)
+    local ff = held.ff or ffLatched or MB.Opt("ffLock", false)
     MB.Sound.fast = ff and true or false
     local speed = ff and MB.Opt("ffSpeed", 4) or 1
     local budget = ff and sys.budgetFF or sys.budget
@@ -1806,7 +1891,7 @@ MB.AddCommand("cheat", "cheat add <code> | list | del <n> | on <n> | off <n> | c
 end)
 
 MB.AddCommand("keys", "keys - show the controls", function()
-    Print("Controls (change one with /mb bind <button> <key>):")
+    Print("Controls (change them on the Controls card: /mb controls):")
     for _, button in ipairs(BUTTON_ORDER) do
         print(("  %-22s %s"):format(BUTTON_NAMES[button], MB.KeyLabel(button)))
     end
@@ -1817,31 +1902,56 @@ MB.AddCommand("keys", "keys - show the controls", function()
     if MB.window:IsShown() and MB.SetKeyDrawer then MB.SetKeyDrawer(true) end
 end)
 
-MB.AddCommand("bind", "bind <button> <key> | bind reset - change a control, e.g. /mb bind a K", function(rest)
-    local db = MB.DB()
-    if rest:lower() == "reset" then
-        db.opt.keys = nil
-        rebuildKeymap()
+-- (0.25) put a button on a key or a controller button (PAD...), for /mb bind and the Controls card. A key or
+-- controller button does one thing: taken from whatever had it, defaults included. Returns the button's name, or nil
+-- and why not.
+function MB.BindButton(button, key)
+    button = type(button) == "string" and button:lower() or nil
+    if not button or not DEFAULT_KEYS[button] then return nil, "Buttons: " .. table.concat(BUTTON_ORDER, ", ") .. "." end
+    key = type(key) == "string" and key:upper() or ""
+    if key == "" then return nil, "Which key?" end
+    if key == "ESCAPE" then return nil, "ESC always pauses and can't be rebound." end
+    if STATE_KEYS[key] then return nil, key .. " loads a memory valve and can't be rebound." end
+    local opt = MB.DB().opt
+    local field, defaults = "keys", DEFAULT_KEYS
+    if isPadKey(key) then field, defaults = "padKeys", DEFAULT_PAD end
+    opt[field] = opt[field] or {}
+    local saved = opt[field]
+    for b, keys in pairs(defaults) do       -- (a default that has the key: written out without it)
+        if b ~= button and not saved[b] then
+            for _, k in ipairs(keys) do
+                if k == key then
+                    local rest = {}
+                    for _, k2 in ipairs(keys) do if k2 ~= key then rest[#rest + 1] = k2 end end
+                    saved[b] = rest
+                    break
+                end
+            end
+        end
+    end
+    for _, keys in pairs(saved) do for i = #keys, 1, -1 do if keys[i] == key then table.remove(keys, i) end end end
+    saved[button] = { key }
+    rebuildKeymap()
     if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
+    return BUTTON_NAMES[button]
+end
+function MB.ResetBindings()
+    local opt = MB.DB().opt
+    opt.keys, opt.padKeys = nil, nil
+    rebuildKeymap()
+    if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
+end
+
+MB.AddCommand("bind", "bind <button> <key> | bind reset - change a control, e.g. /mb bind a K (a controller button: /mb bind a PAD2)", function(rest)
+    if rest:lower() == "reset" then
+        MB.ResetBindings()
         Print("Controls back to defaults.")
         return
     end
     local button, key = rest:match("^(%S+)%s+(%S+)$")
-    button = button and button:lower()
-    if not button or not DEFAULT_KEYS[button] then
-        Print("Buttons: " .. table.concat(BUTTON_ORDER, ", ") .. ".")
-        return
-    end
-    key = key:upper()
-    if key == "ESCAPE" then Print("ESC always pauses and can't be rebound.") return end
-    db.opt.keys = db.opt.keys or {}
-    for _, keys in pairs(db.opt.keys) do -- a key does one thing
-        for i = #keys, 1, -1 do if keys[i] == key then table.remove(keys, i) end end
-    end
-    db.opt.keys[button] = { key }
-    rebuildKeymap()
-    if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
-    Print(("%s is now on %s."):format(BUTTON_NAMES[button], key))
+    local name, why = MB.BindButton(button, key)
+    if not name then Print(why) return end
+    Print(("%s is now on %s."):format(name, key:upper()))
 end)
 
 MB.AddCommand("picture", "picture auto|1|2|3 - show every picture, every 2nd or every 3rd (auto picks for your computer)", function(rest)

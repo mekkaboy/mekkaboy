@@ -1360,50 +1360,163 @@ local REALM_RULES = {
     ["CAMWOW US1 Realm 5 PvE"] = "PvE",
     ["CAMWOW US2 Realm 11 RP"] = "RP",
 }
-local function ruleset()
-    local r = GetRealmName and GetRealmName()
-    if type(r) ~= "string" or secret(r) then return "PvP" end
-    if REALM_RULES[r] then return REALM_RULES[r] end
-    if r:find("[Hh]ardcore") then return "Hardcore" end
-    local pvp = r:find("PvP") or r:find("PVP")
-    if pvp and r:find("RP") then return "RPPvP" end
-    if pvp then return "PvP" end
-    if r:find("RP") then return "RP" end
-    return "PvE"
+local RULESETS = { PvE = true, PvP = true, RP = true, RPPvP = true }
+local RULESET_WORDS = { PvE = "Normal/PvE", PvP = "PvP", RP = "RP", RPPvP = "RP-PvP", Hardcore = "Hardcore" }
+-- (0.24.2) Since Nov 20 WoW Forever's GetRealmName() (and GetNormalizedRealmName()) give "" on every character, so the
+-- realm's name says nothing: not whether it is a US realm, not its ruleset. Before 0.24.2 a blank name read as "not
+-- US", and every character that had not joined yet was told the communities are on the US realms only.
+local function realmName()
+    for _, fn in ipairs({ GetRealmName or false, GetNormalizedRealmName or false }) do
+        if fn then
+            local ok, r = pcall(fn)
+            if ok and type(r) == "string" and not secret(r) and r ~= "" then return r end
+        end
+    end
+    return nil
 end
+-- a character is remembered by its id (it survives a rename and needs no realm name), in MekkaBoyDB.togetherChars
+local function charKey()
+    local guid = UnitGUID and UnitGUID("player")
+    if type(guid) == "string" and not secret(guid) and guid ~= "" then return guid end
+    return nil
+end
+local function oldCharKey(r)
+    local a, b = nil, nil
+    if UnitName then a, b = UnitName("player") end
+    if type(a) ~= "string" or secret(a) then return nil end
+    local name = a .. ((type(b) == "string" and not secret(b) and b ~= "") and (" " .. b) or "")
+    return (r or "") .. "/" .. name
+end
+local function charRecord()
+    local db = MB.DB()
+    db.togetherChars = db.togetherChars or {}
+    local all = db.togetherChars
+    local key = charKey()
+    if not key then                       -- (too early for the id: a record for now, by name)
+        local old = oldCharKey(realmName() or "?") or "?"
+        all[old] = all[old] or {}
+        return all[old]
+    end
+    local rec = all[key]
+    if not rec then
+        rec = {}
+        -- (carried over from 0.24.1 and before, kept by realm name and character name: the name part blank since Nov 20.
+        -- "region" was never true of a US character with a blank realm name, so it is dropped, and it is offered again.)
+        local named = realmName()
+        for _, k in ipairs({ named and oldCharKey(named) or false, oldCharKey("") or false }) do
+            local o = k and all[k]
+            if type(o) == "table" then
+                if o.joined and not rec.joined then rec.joined = o.joined end
+                if o.offered and o.offered ~= "region" and not rec.offered then rec.offered, rec.at = o.offered, o.at end
+                if k:sub(1, 1) == "/" then all[k] = nil end
+            end
+        end
+        all[key] = rec
+    end
+    return rec
+end
+local function hardcore()
+    if C_GameRules and C_GameRules.IsHardcoreActive then
+        local ok, on = pcall(C_GameRules.IsHardcoreActive)
+        if ok and on == true then return true end
+    end
+    return false
+end
+-- the MekkaBoyTogether community this character is in names its ruleset: "MekkaBoyTogether Horde RP-PvP"
+local function rulesetOfClub(name)
+    if type(name) ~= "string" or secret(name) then return nil end
+    if name:find("RP%-PvP") or name:find("RPPvP") or name:find("RP PvP") then return "RPPvP" end
+    if name:find("PvP") then return "PvP" end
+    if name:find("PvE") or name:find("Normal") then return "PvE" end
+    if name:find("RP") then return "RP" end
+    return nil
+end
+local function joinedClubs()
+    if not (C_Club and C_Club.GetSubscribedClubs) then return {} end
+    local ok, clubs = pcall(C_Club.GetSubscribedClubs)
+    if not ok or type(clubs) ~= "table" then return {} end
+    local out = {}
+    for _, c in ipairs(clubs) do
+        local name = c.name
+        if type(name) == "string" and not secret(name) and name:sub(1, #COMMUNITY_NAME) == COMMUNITY_NAME
+           and (c.clubType == nil or c.clubType == 1) then out[#out + 1] = c end
+    end
+    return out
+end
+-- this character's ruleset: the realm's name when the client gives one; else Hardcore from the game's rules; else the
+-- one community it is in; else what the player told MekkaBoy for this character. nil: not known (the player is asked).
+local function ruleset()
+    local r = realmName()
+    if r then
+        if REALM_RULES[r] then return REALM_RULES[r] end
+        if r:find("[Hh]ardcore") then return "Hardcore" end
+        local pvp = r:find("PvP") or r:find("PVP")
+        if pvp and r:find("RP") then return "RPPvP" end
+        if pvp then return "PvP" end
+        if r:find("RP") then return "RP" end
+        return "PvE"
+    end
+    if hardcore() then return "Hardcore" end
+    local rec = charRecord()
+    if rec.ruleset and (RULESETS[rec.ruleset] or rec.ruleset == "Hardcore") then return rec.ruleset end
+    local clubs = joinedClubs()
+    if #clubs == 1 then return rulesetOfClub(clubs[1].name) end
+    return nil
+end
+G.Ruleset = ruleset
 local function faction()
     local f = UnitFactionGroup and UnitFactionGroup("player")
     return (f == "Alliance" or f == "Horde") and f or nil
 end
 -- (0.23.1) the communities live on the US realms only (they are run from US accounts): EU and Oceania get none.
--- A realm counts as US if it is one of REALM_RULES or its name starts "CAMWOW US", and the client's region is not EU/Asia.
-function G.USRealm()
-    local r = GetRealmName and GetRealmName()
-    if type(r) ~= "string" or secret(r) then return false end
+-- US: the client's region is the Americas (GetCurrentRegion 1, else the "portal" setting), and a realm with a name is one
+-- of REALM_RULES or starts "CAMWOW US". A realm without a name (Nov 20 on) goes by the region alone.
+local function usRegion()
     if GetCurrentRegion then
         local ok, region = pcall(GetCurrentRegion)
-        if ok and type(region) == "number" and region ~= 1 then return false end
+        if ok and type(region) == "number" and region > 0 then return region == 1 end
     end
-    return REALM_RULES[r] ~= nil or r:find("^CAMWOW US") ~= nil
+    if GetCVar then
+        local ok, portal = pcall(GetCVar, "portal")
+        if ok and type(portal) == "string" and portal ~= "" then return portal:upper() == "US" end
+    end
+    return nil
 end
+function G.USRealm()
+    local us = usRegion()
+    if us == false then return false end
+    local r = realmName()
+    if r then return REALM_RULES[r] ~= nil or r:find("^CAMWOW US") ~= nil end
+    return us == true
+end
+-- the invite code for this character, its faction and ruleset, and why there is none: "region" (not a US realm),
+-- "ruleset" (the client does not say which, and the player has not told MekkaBoy yet), or nil (no community for it yet)
 function G.CommunityCode()
     local f = faction()
     if not G.USRealm() then return nil, f, ruleset(), "region" end
-    return f and COMMUNITIES[f] and COMMUNITIES[f][ruleset()] or nil, f, ruleset()
+    local rules = ruleset()
+    if not rules then return nil, f, nil, "ruleset" end
+    return f and COMMUNITIES[f] and COMMUNITIES[f][rules] or nil, f, rules
 end
+-- the player says which ruleset this character is on (the card below, or /mb together ruleset <word>)
+function G.SetRuleset(word)
+    local w = type(word) == "string" and word:lower():gsub("[%s%-_]", "") or ""
+    local rules = ({ pve = "PvE", normal = "PvE", pvp = "PvP", rp = "RP", rppvp = "RPPvP", hardcore = "Hardcore" })[w]
+    if not rules then return nil end
+    charRecord().ruleset = rules
+    return rules
+end
+G.RulesetWords = RULESET_WORDS
 -- the MekkaBoyTogether community I am in, if any: { clubId, name }
 function G.Community()
-    if not (C_Club and C_Club.GetSubscribedClubs) then return nil end
-    local ok, clubs = pcall(C_Club.GetSubscribedClubs)
-    if not ok or type(clubs) ~= "table" then return nil end
     local best
-    for _, c in ipairs(clubs) do
-        local name = c.name
-        if type(name) == "string" and not secret(name) and name:sub(1, #COMMUNITY_NAME) == COMMUNITY_NAME
-           and (c.clubType == nil or c.clubType == 1) then
-            -- (one for my faction and ruleset first, should someone be in several)
-            local f = faction()
-            if not best or (f and name:find(f, 1, true) and name:find(ruleset(), 1, true)) then best = c end
+    local f, rules = faction(), nil
+    for _, c in ipairs(joinedClubs()) do
+        -- (one for my faction and ruleset first, should someone be in several)
+        if not best then best = c
+        else
+            rules = rules or realmName() and ruleset() or charRecord().ruleset
+            if f and rules and c.name:find(f, 1, true) and rulesetOfClub(c.name) == rules then best = c end
         end
     end
     return best
@@ -1418,19 +1531,9 @@ end
 -- action, ADDON_ACTION_FORBIDDEN on GetLastTicketResponse, and the session stayed tainted until /reload. Only a click on
 -- the link in the chat window goes through Blizzard's own code, so that link is the way in, and nothing here opens it.)
 -- Communities belong to characters, not accounts: each character is offered its own faction's and ruleset's community
--- once (remembered in MekkaBoyDB.togetherChars, by realm and name), the first time MekkaBoy opens on it playing Open. A
--- character offered nothing (no community for it yet) is offered again once one exists (a later version adds the code).
-local function charRecord()
-    local db = MB.DB()
-    db.togetherChars = db.togetherChars or {}
-    local a, b = nil, nil
-    if UnitName then a, b = UnitName("player") end
-    local name = (type(a) == "string" and a or "?") .. ((type(b) == "string" and b ~= "") and (" " .. b) or "")
-    local r = GetRealmName and GetRealmName()
-    local key = (type(r) == "string" and not secret(r) and r or "?") .. "/" .. name
-    db.togetherChars[key] = db.togetherChars[key] or {}
-    return db.togetherChars[key]
-end
+-- once (remembered in MekkaBoyDB.togetherChars by its id), the first time MekkaBoy opens on it playing Open. A character
+-- offered nothing (no community for it yet) is offered again once one exists (a later version adds the code). (0.24.2) One
+-- whose ruleset the client won't name is asked for it first, on a card: one question, four answers.
 -- (the server sends the list of communities a little after logging in: until then "not in one" is not to be believed)
 local loginAt, clubsLoaded = nil, false
 local function clubsReady() return clubsLoaded or (loginAt and GetTime() - loginAt > 20) end
@@ -1452,6 +1555,18 @@ function G.OfferCommunity(why)
     local link, f, rules = G.CommunityLink(), faction(), ruleset()
     if not link then
         local _, _, _, why2 = G.CommunityCode()
+        if why2 == "ruleset" then
+            -- (0.24.2) the client won't name the realm: ask which ruleset, on a card. On its own ("character") at most
+            -- once a session and three sessions in all; asked for (/mb together join, the first-time questions) always.
+            if why == "character" then
+                if G.rulesetAskedThisSession or (rec.rulesetAsks or 0) >= 3 then return end
+                rec.rulesetAsks = (rec.rulesetAsks or 0) + 1
+            end
+            G.rulesetAskedThisSession = true
+            Print("Which ruleset is this character on? Pick it on the card so MekkaBoy can find your MekkaBoyTogether community, or type /mb together ruleset normal, pvp, rp or rppvp.")
+            if G.ShowRulesetCard then pcall(G.ShowRulesetCard) end
+            return
+        end
         if why == "character" and rec.offered == (why2 or "none") then return end
         rec.offered = why2 or "none"
         if why2 == "region" then
@@ -1709,7 +1824,8 @@ function G.RealmLine()
     end
     local c = G.Community()
     local where = c and (("community %s (%s online of %s)"):format(c.name, tostring(realm.online or "?"), tostring(realm.members or "?")))
-        or (G.CommunityCode() and "not in the community yet (/mb together join)" or (G.USRealm() and "no community for your faction and ruleset yet" or "communities are on the US realms only"))
+        or (G.CommunityCode() and "not in the community yet (/mb together join)" or (not G.USRealm() and "communities are on the US realms only")
+            or (not ruleset() and "ruleset not known yet (/mb together ruleset)") or "no community for your faction and ruleset yet")
     return ("Players you have not added: %s; %s; %d heard lately, %d on your map; %d hellos sent, steps sent %d%s"):format(
         mode == "watch" and "watching (you are not shown)" or "on", where, players, here, realm.hellos, realm.sent,
         realm.refused and (" (the server refused one: " .. tostring(realm.refused) .. ")") or "")
@@ -1904,6 +2020,19 @@ local function together(rest)
         return
     elseif word == "join" or word == "community" then
         G.OfferCommunity("ask")
+        return
+    elseif word == "ruleset" or word:sub(1, 8) == "ruleset " then
+        local arg = rest:sub(8):gsub("^%s+", ""):gsub("%s+$", "")
+        if arg == "" then
+            local rules = ruleset()
+            Print(rules and ("This character's ruleset: %s. To change it: /mb together ruleset normal, pvp, rp or rppvp."):format(RULESET_WORDS[rules] or rules)
+                or "MekkaBoy doesn't know this character's ruleset yet: /mb together ruleset normal, pvp, rp or rppvp.")
+            return
+        end
+        local rules = G.SetRuleset(arg)
+        if not rules then Print("/mb together ruleset normal, pvp, rp or rppvp") return end
+        Print(("This character is on %s."):format(RULESET_WORDS[rules] or rules))
+        G.OfferCommunity("picked")
         return
     elseif word:sub(1, 6) == "block " or word:sub(1, 8) == "unblock " then
         local un = word:sub(1, 2) == "un"
@@ -2151,3 +2280,95 @@ function G.ShowJoinCard()
 end
 function G.HideJoinCard() if card then card:Hide() end end
 function G.JoinCard() return card end      -- (for tests)
+
+-- (0.24.2) The ruleset card: WoW Forever no longer tells addons the realm's name, so a character whose ruleset MekkaBoy
+-- can't work out (not Hardcore, not in a community yet) is asked once, here. One question, the four rulesets as buttons
+-- (the one choice is the action: no separate confirm), and "Not now". The answer is kept for this character only; the
+-- join link and the join card follow straight away. Same look as the join card: it is the step before it.
+local rulesCard
+local function buildRulesCard()
+    local W = 360
+    rulesCard = CreateFrame("Frame", "MekkaBoyRulesetCard", UIParent)
+    rulesCard:SetFrameStrata("DIALOG")
+    rulesCard:SetSize(W, 100)
+    rulesCard:SetPoint("TOP", UIParent, "TOP", 0, -120)
+    rulesCard:EnableMouse(true)
+    rulesCard:SetClampedToScreen(true)
+    local bg = rulesCard:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(rulesCard)
+    bg:SetColorTexture(0.06, 0.08, 0.09, 0.94)
+    for _, e in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true }, { "TOPLEFT", "BOTTOMLEFT" }, { "TOPRIGHT", "BOTTOMRIGHT" } }) do
+        local t = rulesCard:CreateTexture(nil, "BORDER")
+        t:SetPoint(e[1], 0, 0) t:SetPoint(e[2], 0, 0)
+        if e[3] then t:SetHeight(1) else t:SetWidth(1) end
+        t:SetColorTexture(LINE[1], LINE[2], LINE[3], LINE[4])
+    end
+    local accent = rulesCard:CreateTexture(nil, "BORDER")
+    accent:SetPoint("TOPLEFT", 0, 0) accent:SetPoint("BOTTOMLEFT", 0, 0)
+    accent:SetWidth(3)
+    accent:SetColorTexture(PICK[1], PICK[2], PICK[3], 1)
+    local y = -16
+    local function text(font, str, gap, color)
+        local fs = rulesCard:CreateFontString(nil, "OVERLAY", font)
+        fs:SetPoint("TOPLEFT", 20, y)
+        fs:SetWidth(W - 40)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(str)
+        fs:SetTextColor(color[1], color[2], color[3])
+        y = y - (gap or 20)
+        return fs
+    end
+    text("GameFontNormalSmall", "TOGETHER MODE", 18, SOFT)
+    text("GameFontHighlightLarge", "Which ruleset is this character on?", 26, INK)
+    local body = text("GameFontHighlight", "Each ruleset has its own MekkaBoyTogether community. Pick yours and MekkaBoy gives you its join link.", 0, SOFT)
+    y = y - math.max(36, (body:GetStringHeight() or 36)) - 16
+    -- (Blizzard calls it Normal, players say PvE: the button says both, so it gets the widest)
+    local choices = { { "Normal/PvE", "PvE", 104 }, { "PvP", "PvP", 56 }, { "RP", "RP", 56 }, { "RP-PvP", "RPPvP", 80 } }
+    local gap = 8
+    local x = 20
+    for _, ch in ipairs(choices) do
+        local b = cardButton(rulesCard, ch[1], ch[3], true)
+        b:SetPoint("TOPLEFT", rulesCard, "TOPLEFT", x, y)
+        x = x + ch[3] + gap
+        b:SetScript("OnClick", function()
+            rulesCard:Hide()
+            local rules = G.SetRuleset(ch[2])
+            if rules then
+                Print(("This character is on %s. Change it any time with /mb together ruleset."):format(RULESET_WORDS[rules] or rules))
+                G.OfferCommunity("picked")
+            end
+        end)
+    end
+    y = y - 28 - 12
+    local later = cardButton(rulesCard, "Not now", 96, false)
+    later:SetPoint("TOPLEFT", rulesCard, "TOPLEFT", 20, y)
+    later:SetScript("OnClick", function() rulesCard:Hide() end)
+    local note = rulesCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    note:SetPoint("LEFT", later, "RIGHT", 12, 0)
+    note:SetPoint("RIGHT", rulesCard, "RIGHT", -20, 0)
+    note:SetJustifyH("LEFT")
+    note:SetTextColor(SOFT[1], SOFT[2], SOFT[3])
+    note:SetText("Later: /mb together join")
+    y = y - 28 - 16
+    rulesCard:SetHeight(-y)
+    if UISpecialFrames then table.insert(UISpecialFrames, "MekkaBoyRulesetCard") end    -- (Escape closes it)
+    local ag = rulesCard.CreateAnimationGroup and rulesCard:CreateAnimationGroup()
+    if ag then
+        local a = ag:CreateAnimation("Alpha")
+        if a.SetFromAlpha then a:SetFromAlpha(0) a:SetToAlpha(1) else a:SetChange(1) end
+        a:SetDuration(0.14)
+        if a.SetSmoothing then a:SetSmoothing("OUT") end
+        if ag.SetToFinalAlpha then ag:SetToFinalAlpha(true) end
+        rulesCard.fade = ag
+    end
+    rulesCard:Hide()
+end
+function G.ShowRulesetCard()
+    if InCombatLockdown and InCombatLockdown() then return end
+    if not rulesCard then buildRulesCard() end
+    if card and card:IsShown() then card:Hide() end
+    if rulesCard:IsShown() then return end
+    rulesCard:Show()
+    if rulesCard.fade then rulesCard.fade:Stop() rulesCard.fade:Play() end
+end
+function G.RulesetCard() return rulesCard end      -- (for tests)

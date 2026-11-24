@@ -43,6 +43,24 @@ import struct
 import sys
 import time
 
+
+# (0.24.2) The packages this tool needs, checked before anything else, with the one command that installs them all.
+def _need_packages():
+    missing = []
+    for mod in ['lupa', 'numpy', 'scipy', 'soundfile']:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+    if missing:
+        print("This tool needs these Python packages, not installed yet: " + ", ".join(missing))
+        print("Install them with this one command, then run the tool again:")
+        print("    python -m pip install lupa numpy scipy soundfile")
+        print("(On Windows, if 'python' isn't found, use 'py' instead: py -m pip install lupa numpy scipy soundfile)")
+        sys.exit(1)
+
+
+_need_packages()
 import numpy as np
 import soundfile as sf
 
