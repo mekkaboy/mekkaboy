@@ -80,7 +80,23 @@ local BUTTON_NAMES = {
     select = "Select", l = "L (Advance games)", r = "R (Advance games)", turboa = "Turbo A", turbob = "Turbo B", ff = "Fast-forward (hold)",
     rewind = "Rewind (hold)", volup = "Volume up", voldown = "Volume down",
 }
+-- (0.26.1) "Keep WASD for moving": W, A, S and D stay WoW's (your character runs while you play), the D-pad keeps the
+-- arrow keys, and any other key MekkaBoy doesn't use goes to WoW too. Off by default: each player chooses (UI/Hints.lua).
+local WASD = { W = true, A = true, S = true, D = true }
+local NO_WASD = {}
+local function wasdMove() return MB.Opt("wasdMove", false) and true or false end
+MB.WasdMove = wasdMove
+local function defaultKeys()
+    if not wasdMove() then return DEFAULT_KEYS end
+    for b, keys in pairs(DEFAULT_KEYS) do
+        local t = {}
+        for _, k in ipairs(keys) do if not WASD[k] then t[#t + 1] = k end end
+        NO_WASD[b] = t
+    end
+    return NO_WASD
+end
 local STATE_KEYS = { F1 = 1, F2 = 2, F3 = 3, F4 = 4 }   -- load; with Shift: save
+local passedKeys = {}       -- (0.26.1) keys handed on to WoW, until they go up
 local PAD = { up = true, down = true, left = true, right = true, a = true, b = true, start = true, select = true, l = true, r = true }
 
 -- Palettes for original (monochrome) Game Boy games: four 15-bit colors, lightest first.
@@ -224,7 +240,7 @@ end
 local function rebuildKeymap()
     keymap = {}
     local saved = MB.Opt("keys", nil) or {}
-    for button, keys in pairs(DEFAULT_KEYS) do
+    for button, keys in pairs(defaultKeys()) do
         if not saved[button] then
             for _, k in ipairs(keys) do keymap[k] = button end
         end
@@ -251,13 +267,13 @@ end
 MB.DEFAULT_PAD, MB.DEFAULT_KEYS, MB.BUTTON_ORDER, MB.BUTTON_NAMES = DEFAULT_PAD, DEFAULT_KEYS, BUTTON_ORDER, BUTTON_NAMES
 function MB.KeyLabel(button)
     local saved = MB.Opt("keys", nil)
-    local keys = (saved and saved[button]) or DEFAULT_KEYS[button]
-    return keys and table.concat(keys, " or ") or nil
+    local keys = (saved and saved[button]) or defaultKeys()[button]
+    return keys and #keys > 0 and table.concat(keys, " or ") or nil
 end
 
 function MB.HelpText()
     return "Click the screen to play. ESC pauses.\n"
-        .. "D-pad: arrow keys or WASD.  A: " .. MB.KeyLabel("a") .. ".  B: " .. MB.KeyLabel("b") .. ".\n"
+        .. (wasdMove() and "D-pad: arrow keys (WASD moves your character).  A: " or "D-pad: arrow keys or WASD.  A: ") .. MB.KeyLabel("a") .. ".  B: " .. MB.KeyLabel("b") .. ".\n"
         .. "Start: " .. MB.KeyLabel("start") .. ".  Select: " .. MB.KeyLabel("select") .. ".\n"
         .. "L and R (Advance games): " .. MB.KeyLabel("l") .. " and " .. MB.KeyLabel("r") .. ".\n"
         .. "Fast-forward: hold " .. MB.KeyLabel("ff") .. ".  Rewind: hold " .. MB.KeyLabel("rewind") .. ".\n"
@@ -1188,6 +1204,13 @@ local function inputDown(self, key, fromPad)
             self:SetPropagateKeyboardInput(true)   -- the one key let through: screenshots
             return
         end
+        -- (0.26.1) keeping WASD for moving: a key MekkaBoy has no use for goes on to WoW, and is let go there too
+        if wasdMove() and not (key == "ESCAPE" or keymap[key] or STATE_KEYS[key] or picking or isToggleKey(key)
+            or (MB.ControlsWaiting and MB.ControlsWaiting())) then
+            self:SetPropagateKeyboardInput(true)
+            passedKeys[key] = true
+            return
+        end
         self:SetPropagateKeyboardInput(false)      -- everything else stays here
         if key == "ESCAPE" then
             if picking then closePicker() elseif running then pause() else MB.Hide() end
@@ -1236,7 +1259,16 @@ local function inputUp(key)
     if setHeld(button, false, "key:" .. key) then MB.SetPressed(shown(button), false) end
 end
 keyCapture:SetScript("OnKeyDown", function(self, key) inputDown(self, key, false) end)
-keyCapture:SetScript("OnKeyUp", function(_, key) inputUp(key) end)
+keyCapture:SetScript("OnKeyUp", function(self, key)
+    -- (0.26.1) a key that went on to WoW goes up there too (else a held W would keep the character running)
+    if passedKeys[key] then
+        passedKeys[key] = nil
+        self:SetPropagateKeyboardInput(true)
+        return
+    end
+    if wasdMove() then self:SetPropagateKeyboardInput(false) end
+    inputUp(key)
+end)
 
 -- (0.25) A controller. The game client hands controller buttons to a frame that asks for them, by name (PAD1, PADDUP,
 -- PADFORWARD...), much as it hands it keys; the left stick comes as a direction. Only with "Play with a controller" on
@@ -1974,7 +2006,7 @@ function MB.BindButton(button, key)
     if key == "ESCAPE" then return nil, "ESC always pauses and can't be rebound." end
     if STATE_KEYS[key] then return nil, key .. " loads a memory valve and can't be rebound." end
     local opt = MB.DB().opt
-    local field, defaults = "keys", DEFAULT_KEYS
+    local field, defaults = "keys", defaultKeys()
     if isPadKey(key) then field, defaults = "padKeys", DEFAULT_PAD end
     opt[field] = opt[field] or {}
     local saved = opt[field]
@@ -1995,6 +2027,13 @@ function MB.BindButton(button, key)
     rebuildKeymap()
     if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
     return BUTTON_NAMES[button]
+end
+-- (0.26.1) switch "Keep WASD for moving" on or off for this account
+function MB.SetWasdMove(on)
+    MB.DB().opt.wasdMove = on and true or nil
+    MB.DB().opt.wasdAsked = true
+    rebuildKeymap()
+    if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end
 end
 function MB.ResetBindings()
     local opt = MB.DB().opt

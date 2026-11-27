@@ -37,6 +37,31 @@ function MB.OfferAddGame(force)
     })
 end
 
+-- (0.26.1) Keep WASD for moving? Asked once per account: players who had MekkaBoy before choose between that and keeping
+-- their controls; new players between that and WASD moving the game. Closing the card keeps things as they are.
+function MB.OfferWasd(force)
+    local opt = MB.DB().opt
+    if opt.wasdAsked and not force then return false end
+    if MB.Onboarded and not MB.Onboarded() then return false end
+    if opt.wasdPlayer == nil then
+        local saves = MB.Saves and MB.Saves() or {}
+        opt.wasdPlayer = (MB.DB().lastCart or next(saves.gba or {}) or next(saves.gb or {})) and "existing" or "new"
+    end
+    local shown = MB.ShowCard("wasd_" .. opt.wasdPlayer, {
+        kicker = "CONTROLS",
+        title = "Keep WASD for moving your character?",
+        body = "MekkaBoy can leave W, A, S and D to WoW while you play. Your character runs with them, and the game's D-pad stays on the arrow keys. Other keys MekkaBoy doesn't use go to WoW too.",
+        width = 520,
+        buttons = {
+            { "Keep WASD for moving", function() MB.SetWasdMove(true) MB.Print("WASD moves your character now; the D-pad is on the arrow keys. Change it any time: /mb controls") end, true, 180 },
+            { opt.wasdPlayer == "existing" and "Keep it as is" or "WASD moves the game", function() MB.SetWasdMove(false) end, false, opt.wasdPlayer == "existing" and 116 or 150 },
+        },
+        note = "Change it any time: /mb controls",
+    })
+    if shown then opt.wasdAsked = true end
+    return shown
+end
+
 -- the console opened: a moment later (after the first-time questions and the Together cards have had their turn)
 MB.window:HookScript("OnShow", function()
     if C_Timer and C_Timer.After then
@@ -46,7 +71,10 @@ MB.window:HookScript("OnShow", function()
             local busy = _G.MekkaBoyWelcome and _G.MekkaBoyWelcome:IsShown()
                 or _G.MekkaBoyJoinCard and _G.MekkaBoyJoinCard:IsShown()
                 or _G.MekkaBoyRulesetCard and _G.MekkaBoyRulesetCard:IsShown()
-            if not busy then pcall(MB.OfferAddGame) end
+            if busy then return end
+            local ok, asked = pcall(MB.OfferWasd)
+            if ok and asked then return end
+            pcall(MB.OfferAddGame)
         end)
     end
 end)
@@ -85,5 +113,6 @@ MB.AddCommand("hints", "", function(rest)
     rest = (rest or ""):lower()
     if rest == "sound" then MB.ShowSilentCard("gba")
     elseif rest == "soundgb" then MB.ShowSilentCard("gb")
+    elseif rest == "wasd" then MB.OfferWasd(true)
     else MB.OfferAddGame(true) end
 end)

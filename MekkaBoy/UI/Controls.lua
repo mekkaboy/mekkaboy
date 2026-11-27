@@ -42,6 +42,7 @@ local function refresh()
     card.ctl:SetChecked(MB.Opt("controller", false) and true or false)
     card.ff:SetChecked(MB.Opt("ffToggle", false) and true or false)
     card.lock:SetChecked(MB.Opt("ffLock", false) and true or false)
+    card.wasd:SetChecked(MB.Opt("wasdMove", false) and true or false)
     card.hint:SetText(waiting and "Escape cancels." or "Click a key or a button to change it.")
 end
 
@@ -67,6 +68,7 @@ local function take(key, fromPad)
     return true
 end
 MB.CapturingInput = function(key, fromPad) return take(key, fromPad) end
+MB.ControlsWaiting = function() return waiting ~= nil end
 
 local function startWaiting(button, pad)
     if pad and not MB.Opt("controller", false) then
@@ -158,7 +160,12 @@ local function build()
     card.lock = check(card, "Always fast-forward", "Games always run fast. Untick it to go back to normal speed.",
         function(on) MB.DB().opt.ffLock = on or nil if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end end)
     card.lock:SetPoint("TOPLEFT", 16, y)
-    y = y - 50
+    y = y - 44
+    -- (0.26.1) WASD for moving your character while you play
+    card.wasd = check(card, "Keep WASD for moving", "Your character runs with W, A, S and D while you play; the D-pad stays on the arrow keys. Other keys MekkaBoy doesn't use go to WoW too.",
+        function(on) MB.SetWasdMove(on) end)
+    card.wasd:SetPoint("TOPLEFT", 16, y)
+    y = y - 58
     -- the table: button, key, controller button
     local NAME_W, KEY_W, PAD_W = 150, 124, 124
     local hk = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")

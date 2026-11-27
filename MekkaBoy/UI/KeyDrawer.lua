@@ -68,7 +68,9 @@ local function dpad()
     local arrows = u[1] == "Up" and d[1] == "Down" and l[1] == "Left" and r[1] == "Right"
     local wasd = u[2] == "W" and d[2] == "S" and l[2] == "A" and r[2] == "D"
     if arrows and wasd then return "Arrows or WASD" end
-    if arrows and not u[2] and not d[2] and not l[2] and not r[2] then return "Arrows" end
+    if arrows and not u[2] and not d[2] and not l[2] and not r[2] then
+        return (MB.WasdMove and MB.WasdMove()) and "Arrows (WASD moves you)" or "Arrows"
+    end
     return ("%s %s %s %s"):format(u[1] or "-", l[1] or "-", d[1] or "-", r[1] or "-")
 end
 

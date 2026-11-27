@@ -63,7 +63,7 @@ changing.
 
 | Button | Key |
 |---|---|
-| D-pad | Arrow keys, or WASD |
+| D-pad | Arrow keys (and WASD, unless you keep WASD for moving your character) |
 | A / B | X / Z |
 | Start / Select | Enter / Backspace |
 | L / R (Advance games) | Q / E, or the bars on top of the console |
