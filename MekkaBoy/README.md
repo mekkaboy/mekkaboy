@@ -114,6 +114,18 @@ account, on your computer's clock. Rewind keeps the last 40 seconds of a Game Bo
 (`/mb rewind 90` keeps more). Cheats: GameShark and Game Genie codes for Game
 Boy games, `/mb cheat add <code>`.
 
+**Copy a save, paste it back.** Settings > Your saves: pick a game, then
+**Copy save** turns its save into one line of text (Ctrl+C copies it). Keep it
+somewhere safe, or paste it with **Paste a save** on another computer, another
+character, or a fresh install; MekkaBoy says whose save it is and asks before
+anything changes. Only the game's own save travels: memory valves stay put.
+Also `/mb save copy [game]` and `/mb save paste`.
+
+**Backups.** The first time you play a game each day, MekkaBoy keeps a copy of
+its save, and it keeps one before a save is replaced (Start over, a pasted
+save, a backup put back). The last 5 per game are kept; **Backups** on the
+settings page (or `/mb save backups [game]`) puts one back.
+
 ## Sound
 
 The five games that come with MekkaBoy have their music and sounds. A game you

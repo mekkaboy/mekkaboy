@@ -292,6 +292,12 @@ function Import.Read(code)
     return info
 end
 
+-- (0.26) zlib data as base64 text -> the bytes, worked out here (save codes, SaveCodes.lua, on a client without zlib)
+function Import.InflateText(text, size)
+    local banks = inflateToBanks(text, size)
+    return table.concat(banks)
+end
+
 -- Unpack a code into its ROM. Returns info, banks (a list of 16 KB strings),
 -- or nil and why not. info.how says which decoder did the work, info.ms how long.
 function Import.Unpack(code)

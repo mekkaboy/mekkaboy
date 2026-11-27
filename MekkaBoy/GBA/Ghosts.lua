@@ -1464,6 +1464,16 @@ local function ruleset()
     return nil
 end
 G.Ruleset = ruleset
+-- (0.26) where this character's ruleset comes from: "realm" (the realm's name), "hardcore", "picked" (the player said,
+-- kept for this character only), "community" (the one community it is in), or nil (not known)
+function G.RulesetSource()
+    if realmName() then return "realm" end
+    if hardcore() then return "hardcore" end
+    local rec = charRecord()
+    if rec.ruleset and (RULESETS[rec.ruleset] or rec.ruleset == "Hardcore") then return "picked" end
+    if #joinedClubs() == 1 and rulesetOfClub(joinedClubs()[1].name) then return "community" end
+    return nil
+end
 local function faction()
     local f = UnitFactionGroup and UnitFactionGroup("player")
     return (f == "Alliance" or f == "Horde") and f or nil
@@ -1548,6 +1558,19 @@ function G.OfferCommunity(why)
     local rec = charRecord()
     local c = G.Community()
     if c then
+        -- (0.26) in a community for another ruleset or faction (a wrong pick on the card, say): the right link, and how to
+        -- leave the other one (only the player can leave a community). Once a session until it's put right.
+        local rules, f0 = ruleset(), faction()
+        local theirs = rulesetOfClub(c.name)
+        if rules and ((theirs and theirs ~= rules) or (f0 and not c.name:find(f0, 1, true))) then
+            if why == "character" and G.mismatchTold then return end
+            G.mismatchTold = true
+            local link = G.CommunityLink()
+            local leave = "To leave the other, right-click it in your Communities list and choose Leave."
+            Print(("You're in %s, but this character is on %s. %s"):format(c.name, RULESET_WORDS[rules] or rules,
+                link and ("Join the right one: " .. link .. ". " .. leave) or ("There's no MekkaBoyTogether community for it yet. " .. leave)))
+            return
+        end
         rec.joined = c.name
         if why == "ask" then Print(("You're in %s: members playing the same game on your map show up in your game."):format(c.name)) end
         return
@@ -1773,6 +1796,29 @@ function G.HelloTick()
     if communityOK() and now - realm.roundAt >= HELLO_EVERY then
         realm.roundAt = now
         for _, name in ipairs(communityTurn(COMMUNITY_EACH)) do MB.Link.Send(text, "WHISPER", name, nextLane()) end
+    end
+    -- (0.26) once a session, with a game on: how many other trainers are online, so an empty map doesn't look broken
+    -- ("I never see anyone on"). The members list is read by the round above.
+    if not realm.toldOnline and MB.FlashNote then
+        local c = G.Community()
+        local short, long
+        if c and realm.online then
+            if realm.online > 0 then
+                short = ("Together: %d trainer%s online"):format(realm.online, realm.online == 1 and "" or "s")
+                long = ("Together: %d other trainer%s online in %s. They show up in your game when they're on your map."):format(realm.online, realm.online == 1 and "" or "s", c.name)
+            else
+                short = "Together: no one else online"
+                long = ("Together: no one else in %s is online right now. Trainers show up in your game when they're on your map."):format(c.name)
+            end
+        elseif not c and G.CommunityCode() then
+            short = "Together: join to meet trainers"
+            long = "Together: join the MekkaBoyTogether community to meet other trainers: /mb together join"
+        end
+        if short then
+            realm.toldOnline = true
+            MB.FlashNote(short, 8)
+            Print(long)
+        end
     end
 end
 do
@@ -2319,8 +2365,9 @@ local function buildRulesCard()
         return fs
     end
     text("GameFontNormalSmall", "TOGETHER MODE", 18, SOFT)
-    text("GameFontHighlightLarge", "Which ruleset is this character on?", 26, INK)
+    rulesCard.title = text("GameFontHighlightLarge", "Which ruleset is this character on?", 26, INK)
     local body = text("GameFontHighlight", "Each ruleset has its own MekkaBoyTogether community. Pick yours and MekkaBoy gives you its join link.", 0, SOFT)
+    rulesCard.body = body
     y = y - math.max(36, (body:GetStringHeight() or 36)) - 16
     -- (Blizzard calls it Normal, players say PvE: the button says both, so it gets the widest)
     local choices = { { "Normal/PvE", "PvE", 104 }, { "PvP", "PvP", 56 }, { "RP", "RP", 56 }, { "RP-PvP", "RPPvP", 80 } }
@@ -2334,7 +2381,8 @@ local function buildRulesCard()
             rulesCard:Hide()
             local rules = G.SetRuleset(ch[2])
             if rules then
-                Print(("This character is on %s. Change it any time with /mb together ruleset."):format(RULESET_WORDS[rules] or rules))
+                Print(("This character is on %s. Picked the wrong one? Settings > Together ruleset > Change."):format(RULESET_WORDS[rules] or rules))
+                G.mismatchTold = nil
                 G.OfferCommunity("picked")
             end
         end)
@@ -2363,9 +2411,18 @@ local function buildRulesCard()
     end
     rulesCard:Hide()
 end
-function G.ShowRulesetCard()
+-- changing: opened from the settings page's Change (the title and line say what it's on now)
+function G.ShowRulesetCard(changing)
     if InCombatLockdown and InCombatLockdown() then return end
     if not rulesCard then buildRulesCard() end
+    local now = changing and ruleset()
+    if now then
+        rulesCard.title:SetText("Change this character's ruleset")
+        rulesCard.body:SetText(("It's on %s now. Pick the right one and MekkaBoy gives you that community's join link."):format(RULESET_WORDS[now] or now))
+    else
+        rulesCard.title:SetText("Which ruleset is this character on?")
+        rulesCard.body:SetText("Each ruleset has its own MekkaBoyTogether community. Pick yours and MekkaBoy gives you its join link.")
+    end
     if card and card:IsShown() then card:Hide() end
     if rulesCard:IsShown() then return end
     rulesCard:Show()

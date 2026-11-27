@@ -214,6 +214,12 @@ local function flash(msg)
     note, noteUntil = msg, GetTime() + 2.5
     refreshStatus()
 end
+-- (0.26) a note on the console's status line for a while (Together's "who is online", Ghosts.lua)
+function MB.FlashNote(msg, secs)
+    if not machine then return end
+    note, noteUntil = msg, GetTime() + (secs or 2.5)
+    refreshStatus()
+end
 
 local function rebuildKeymap()
     keymap = {}
@@ -636,6 +642,7 @@ local function start(fresh)
     saveKey = rom.id
     storeKey = MB.SaveKey(rom.id, rom)
     MB.DB().lastCart = rom.id
+    if MB.BackupOnStart then pcall(MB.BackupOnStart, rom, storeKey) end     -- (0.26: the save as it was when today's play began)
     local ok, res, word = pcall(sys.new, rom, storeKey)
     if not (ok and res) then
         broken = true
@@ -1645,6 +1652,7 @@ end)
 -- every save is in one settings file, so there is no file to delete by hand). It asks first. The erased save and its
 -- resume point are kept until logout or /reload, so "/mb newgame undo" can put them back. Memory valves are not touched.
 -- Not during a link or trade, nor mid-round in one of our own games.
+local backupBefore
 local erased = {}        -- [where the save lives] = { save =, resume =, name =, cart = }
 local erasedOrder = {}   -- (oldest first: "undo" with no game in the console puts back the newest still erased)
 local function lastErased() for i = #erasedOrder, 1, -1 do if erased[erasedOrder[i]] then return erasedOrder[i] end end end
@@ -1662,6 +1670,12 @@ function MB.SavedGames()
     return t
 end
 local function saveStore() return (sys and sys.kind == "gb") and MB.Saves().gb or MB.Saves().gba end
+-- (0.26) keep a backup of a save that is about to be replaced (SaveCodes.lua); never stands in the way if it can't
+local function cartKind(c) return (c and c.system == "gba") and "gba" or "gb" end
+backupBefore = function(key, c, save, why)
+    if not (save and c and MB.SaveCode and not MB.DB().testSaves) then return end
+    pcall(MB.SaveCode.Backup, key, cartKind(c), c, save, why)
+end
 local function swapSave(key, save, resume, word)
     if machine then
         pause()
@@ -1697,29 +1711,31 @@ local function startOver()
     if newGameBlocked() then return end
     local key, name = storeKey or saveKey, gameName()
     if MB.SaveGame then pcall(MB.SaveGame) end                -- (what's on screen now is what the undo brings back)
-    local ask = ("Start %s over from the beginning?\nIts save is erased. Changed your mind? /mb newgame undo puts it back until you log out."):format(name)
+    local ask = ("Start %s over from the beginning?\nIts save is erased. A backup is kept: Backups on the settings page puts it back."):format(name)
     MB.Friends.Ask("newgame", ask, "Start over", "Cancel", function()
         if newGameBlocked() or (storeKey or saveKey) ~= key then return end
         local states = gameStates()
+        backupBefore(key, MB.Carts.Find(saveKey), saveStore()[key], "startover")
         erased[key] = { save = saveStore()[key], resume = states.resume, name = name }
         erasedOrder[#erasedOrder + 1] = key
         swapSave(key, nil, nil, "is starting over")
-        Print(name .. " is starting over. Changed your mind? /mb newgame undo puts your old save back, until you log out or /reload. Your memory valves are still there.")
+        Print(name .. " is starting over. Changed your mind? /mb newgame undo, or Backups on the settings page. Your memory valves are still there.")
     end, nil, 0)
 end
 -- a game that isn't in the console: its save is erased where it lies, and it starts from the beginning when next played
 local function startOverShelf(c)
     local key, s = MB.SaveKey(c.id), cartSys(c)
     if not (key and s) then return end
-    MB.Friends.Ask("newgame", ("Start %s over from the beginning?\nIts save is erased. Changed your mind? /mb newgame undo puts it back until you log out."):format(c.name), "Start over", "Cancel", function()
+    MB.Friends.Ask("newgame", ("Start %s over from the beginning?\nIts save is erased. A backup is kept: Backups on the settings page puts it back."):format(c.name), "Start over", "Cancel", function()
         if saveKey == c.id and machine then startOver() return end
         local states = s.statesFor(key)
+        backupBefore(key, c, cartStore(c)[key], "startover")
         erased[key] = { save = cartStore(c)[key], resume = states.resume, name = c.name, cart = c }
         erasedOrder[#erasedOrder + 1] = key
         cartStore(c)[key] = nil
         MB.BatteryKept(key)
         states.resume, states.resumeRev = nil, nil
-        Print(c.name .. " starts from the beginning the next time you play it. Changed your mind? /mb newgame undo puts its save back, until you log out or /reload. Your memory valves are still there.")
+        Print(c.name .. " starts from the beginning the next time you play it. Changed your mind? /mb newgame undo, or Backups on the settings page. Your memory valves are still there.")
     end, nil, 0)
 end
 local function undoShelf(key)
@@ -1772,6 +1788,51 @@ function MB.StartOver(id)
     local c = MB.Carts.Find(id)
     if c then startOverShelf(c) end
 end
+-- (0.26) Saves for the save codes and backups (UI/Saves.lua). A game on the shelf with a save, and where it lives.
+-- The game in the console hands over what it has first, so a copy is never behind what's on screen.
+function MB.SaveOf(id)
+    local c = id and MB.Carts.Find(id)
+    if not (c and cartSys(c)) then return nil end
+    local key = MB.SaveKey(c.id)
+    if machine and saveKey == c.id then
+        if MB.SaveGame then pcall(MB.SaveGame) end
+        key = storeKey or key
+    end
+    return cartStore(c)[key] or nil, c, key, cartKind(c)
+end
+MB.CartKind = cartKind
+function MB.InConsole() return machine and saveKey or nil end
+MB.CartHasSaves = function(c) return cartSys(c) ~= nil end
+-- why the save of the game in the console can't be swapped right now (or nil)
+function MB.SaveSwapBlocked(id)
+    if not (machine and saveKey == id) then return nil end
+    if linkBusy() then return "Not during a link or a trade. Finish it first." end
+    if gameBusy() then return "Not in the middle of a round. Finish the hand first." end
+    return nil
+end
+-- put a save in for a game (a pasted code or a backup): the save it had is kept as a backup first. The game in the
+-- console restarts from the new save; one on the shelf starts from it the next time it's played. why: paste|restore.
+function MB.PutSave(id, save, why)
+    local c = MB.Carts.Find(id)
+    if not (c and cartSys(c) and save) then return false, "That game isn't in MekkaBoy." end
+    local blocked = MB.SaveSwapBlocked(id)
+    if blocked then return false, blocked end
+    if InCombatLockdown and InCombatLockdown() then return false, "Not in combat." end
+    local old, _, key = MB.SaveOf(id)
+    backupBefore(key, c, old, why)
+    save.at = save.at or (date and date("%Y-%m-%d %H:%M") or "?")
+    local word = why == "restore" and "is back to the backup" or "has the pasted save"
+    if machine and saveKey == id then
+        swapSave(key, save, nil, word)
+    else
+        cartStore(c)[key] = save
+        MB.BatteryKept(key)
+        local states = cartSys(c).statesFor(key)
+        states.resume, states.resumeRev = nil, nil
+    end
+    return true
+end
+
 MB.AddCommand("newgame", "newgame [game] - start a game over from the beginning: the one in the console, or the one named (asks first; /mb newgame undo puts the save back)", function(rest)
     rest = (rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if rest:lower() == "undo" then undoStartOver() return end

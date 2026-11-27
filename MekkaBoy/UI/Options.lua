@@ -94,6 +94,7 @@ local function button(parent, label, width, onClick)
     glow:SetColorTexture(1, 0.82, 0.3, 0.25)
     local words = text(b, "GameFontNormal", label)
     words:SetPoint("CENTER")
+    b.words = words
     b:SetScript("OnClick", onClick)
     return b
 end
@@ -113,9 +114,9 @@ local PAUSES = {
 -- own, not the game's dropdown template; it closes on a pick, on Escape with the page, or when the page hides.
 local function gamePicker(x, top)
     local W = 170
-    local title = text(panel, "GameFontNormal", "Start a game over")
+    local title = text(panel, "GameFontNormal", "Your saves")
     title:SetPoint("TOPLEFT", panel, "TOPLEFT", x, top)
-    local note = text(panel, "GameFontDisableSmall", "Erases one game's save. It asks first.")
+    local note = text(panel, "GameFontDisableSmall", "Pick a game: start it over, copy its save, or see its backups.")
     note:SetPoint("TOPLEFT", panel, "TOPLEFT", x, top - 16)
     local chosen
     local pick = CreateFrame("Button", nil, panel)
@@ -145,10 +146,35 @@ local function gamePicker(x, top)
         if MB.StartOver then MB.StartOver(id) end
     end)
     go:SetPoint("LEFT", pick, "RIGHT", 8, 0)
+    -- (0.26) the save itself: copy it out as a code, see the backups; paste needs no pick (the code says whose it is)
+    local copyB = button(panel, "Copy save", 86, function()
+        if not chosen then return end
+        local id = chosen.id
+        MB.CloseOptions()
+        if MB.CopySave then MB.CopySave(id) end
+    end)
+    copyB:SetPoint("TOPLEFT", pick, "BOTTOMLEFT", 0, -6)
+    tooltip(copyB, "The game's save as one line of text. Paste it back (Paste a save) on any computer or character.")
+    local backB = button(panel, "Backups", 78, function()
+        if not chosen then return end
+        local id = chosen.id
+        MB.CloseOptions()
+        if MB.ShowBackups then MB.ShowBackups(id) end
+    end)
+    backB:SetPoint("LEFT", copyB, "RIGHT", 8, 0)
+    tooltip(backB, "MekkaBoy keeps a copy of the save each day you play, and before a save is replaced. Put one back from here.")
+    local pasteB = button(panel, "Paste a save", 100, function()
+        MB.CloseOptions()
+        if MB.PasteSave then MB.PasteSave() end
+    end)
+    pasteB:SetPoint("LEFT", backB, "RIGHT", 8, 0)
+    tooltip(pasteB, "Put a copied save back in. It says whose save it is and asks before anything changes.")
     local function setGo()
         local on = chosen ~= nil
-        go:SetEnabled(on)
-        go:SetAlpha(on and 1 or 0.45)
+        for _, b in ipairs({ go, copyB, backB }) do
+            b:SetEnabled(on)
+            b:SetAlpha(on and 1 or 0.45)
+        end
     end
 
     local list = CreateFrame("Frame", nil, panel)
@@ -202,7 +228,7 @@ local function gamePicker(x, top)
         list:Show()
     end
     pick:SetScript("OnClick", function() if list:IsShown() then list:Hide() else openList() end end)
-    tooltip(pick, "Your games that have a save. The one you pick starts from the beginning; /mb newgame undo puts its save back until you log out.")
+    tooltip(pick, "Your games that have a save. Start over erases it (it asks first, and keeps a backup).")
     panel:HookScript("OnHide", function() list:Hide() end)
     refreshers[#refreshers + 1] = function()
         -- (a game whose save is gone since, or that was removed, is no longer a choice)
@@ -242,7 +268,7 @@ local function build()
         function() return MB.Opt("resume", true) end, function(v) db().opt.resume = v end), 16, 24)
     place(check(panel, "Show the button on the minimap", nil,
         function() return MB.Opt("minimap", true) end, function(v) db().opt.minimap = v if MB.ApplyMinimapButton then MB.ApplyMinimapButton() end end), 16, 40)
-    gamePicker(300, y + 4)
+    gamePicker(320, y + 4)
     place(slider(panel, "Size", 0, 6, 1, "How many screen pixels each game pixel takes. Automatic picks the largest that fits your screen comfortably.",
         function() return MB.Opt("scale", nil) or 0 end,
         function(v) db().opt.scale = (v >= 1) and v or nil MB.ApplyScale() end,
@@ -288,6 +314,35 @@ local function build()
         function() for i, k in ipairs(MODES) do if k == MB.PlayMode() then return i end end return 3 end,
         function(v) MB.SetPlayMode(MODES[v] or "open") end,
         function(v) return MB.PLAY_WORDS[MODES[v] or "open"] end), 20, 30)
+
+    -- (0.26) this character's Together ruleset, and a way to change it (a wrong pick on the card put players in the wrong
+    -- community). Kept per character. A realm that names itself, or Hardcore, needs no picking.
+    do
+        local G = MB.Ghosts
+        local label = text(panel, "GameFontNormal", "Together ruleset:")
+        label:SetPoint("TOPLEFT", panel, "TOPLEFT", 350, y + 38)
+        local value = text(panel, "GameFontHighlight", "")
+        value:SetPoint("LEFT", label, "RIGHT", 6, 0)
+        local change = button(panel, "Change", 76, function()
+            MB.CloseOptions()
+            if G and G.ShowRulesetCard then G.ShowRulesetCard(true) end
+        end)
+        change:SetPoint("LEFT", value, "RIGHT", 10, 0)
+        local note = text(panel, "GameFontDisableSmall", "Each ruleset has its own MekkaBoyTogether community.")
+        note:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -8)
+        note:SetWidth(250)
+        note:SetJustifyH("LEFT")
+        refreshers[#refreshers + 1] = function()
+            local rules = G and G.Ruleset and G.Ruleset()
+            local from = G and G.RulesetSource and G.RulesetSource()
+            value:SetText(rules and ((G.RulesetWords and G.RulesetWords[rules]) or rules) or "not set")
+            local fixed = from == "realm" or from == "hardcore"
+            change:SetShown(not fixed)
+            change.words:SetText(rules and "Change" or "Pick")
+            note:SetText(fixed and "Read from your realm. Each ruleset has its own MekkaBoyTogether community."
+                or "Each ruleset has its own MekkaBoyTogether community.")
+        end
+    end
 
     local x = 16
     for _, b in ipairs({

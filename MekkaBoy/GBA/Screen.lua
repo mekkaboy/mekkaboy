@@ -61,8 +61,10 @@ local function openStates()
         ok = LoadAddOn(STATES)
     end
     haveStates = ok and true or false
+    if not haveStates then triedStates = false end      -- (0.26 qa: try again next time rather than for the whole session)
     return haveStates
 end
+MB.OpenSideStore = openStates        -- (0.26: backups live in the same side addon, SaveCodes.lua)
 function Sys.statesFor(key)
     if openStates() then
         MekkaBoyStates = MekkaBoyStates or {}

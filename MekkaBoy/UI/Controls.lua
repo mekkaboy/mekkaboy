@@ -41,6 +41,7 @@ local function refresh()
     end
     card.ctl:SetChecked(MB.Opt("controller", false) and true or false)
     card.ff:SetChecked(MB.Opt("ffToggle", false) and true or false)
+    card.lock:SetChecked(MB.Opt("ffLock", false) and true or false)
     card.hint:SetText(waiting and "Escape cancels." or "Click a key or a button to change it.")
 end
 
@@ -152,6 +153,11 @@ local function build()
     card.ff = check(card, "Toggle fast-forward", "On: press once to speed up, again to go back to normal. Off: hold to fast-forward.",
         function(on) MB.DB().opt.ffToggle = on or nil if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end end)
     card.ff:SetPoint("TOPLEFT", 16, y)
+    y = y - 44
+    -- (0.26) fast-forward that stays on, here as well as /mb ff lock (players asked for it, not knowing the command)
+    card.lock = check(card, "Always fast-forward", "Games always run fast. Untick it to go back to normal speed.",
+        function(on) MB.DB().opt.ffLock = on or nil if MB.KeyDrawerOpen and MB.KeyDrawerOpen() then MB.RefreshKeyDrawer() end end)
+    card.lock:SetPoint("TOPLEFT", 16, y)
     y = y - 50
     -- the table: button, key, controller button
     local NAME_W, KEY_W, PAD_W = 150, 124, 124
